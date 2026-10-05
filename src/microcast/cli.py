@@ -69,6 +69,22 @@ def lake_snapshots(table: str = typer.Argument("bronze.nwp_point")) -> None:
         typer.echo(f"{s.snapshot_id}  {ts:%Y-%m-%d %H:%M:%S}Z  +{summary.get('added-records', '?')} rows")
 
 
+@lake_app.command("copy")
+def lake_copy(
+    to: str = typer.Option(
+        ..., help="Target catalog name, configured via PYICEBERG_CATALOG__<NAME>__* or ~/.pyiceberg.yaml"
+    ),
+) -> None:
+    """Copy bronze row for row into another catalog (e.g. the cluster's Lakekeeper). Resumable."""
+    from pyiceberg.catalog import load_catalog
+
+    from microcast.lake.catalog import get_catalog
+    from microcast.lake.copy import copy_bronze
+
+    rows = copy_bronze(get_catalog(), load_catalog(to), log=typer.echo)
+    typer.echo(", ".join(f"{k} +{v}" for k, v in rows.items()) + "; now run `microcast build silver/gold` there")
+
+
 @ingest_app.command("nwp")
 def ingest_nwp(
     model: str = typer.Argument(..., help="Key in config/models.yaml, e.g. hrrr"),

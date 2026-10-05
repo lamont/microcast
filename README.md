@@ -41,6 +41,11 @@ uv run microcast site --out site                          # static pages for wea
 python -m http.server -d site 8000
 ```
 
+Collectors (run on a schedule): `microcast ingest synoptic` (daily; the free
+tier keeps only 7 days), `microcast ingest purpleair` (every 2 min on the home
+network). To move the lake to the cluster: `microcast lake copy --to <catalog>`,
+then rebuild silver and gold there (decisions D11).
+
 Each ingest batch appends new Parquet files and a new Iceberg snapshot to
 `bronze`, which is append-only. Silver and gold rebuild whole partitions into
 fewer, larger files. To move from local disk to Lakekeeper and S3/MinIO, set
@@ -58,6 +63,8 @@ src/microcast/
   ingest/hrrr_zarr.py  HRRR history from the hrrrzarr archive (backfill)
   ingest/obs.py    station truth: IEM ASOS/HADS, NDBC
   ingest/purpleair.py  own PurpleAir sensor (LAN or API)
+  ingest/synoptic.py   Synoptic/CWOP stations (last 7 days, accrues)
+  lake/copy.py     copy bronze to another catalog (laptop -> cluster)
   transform/       bronze → silver → gold (DuckDB SQL)
   models/          Forecaster zoo: raw_hrrr, bias_rolling, gbm_residual
   backtest/        folds, CRPS, skill + bootstrap CI, leaderboard

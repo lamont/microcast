@@ -124,6 +124,7 @@ def build(out_dir: Path) -> Path:
     monthly = pd.read_csv(reports / "monthly_skill.csv")
     meta = json.loads((reports / "backtest_meta.json").read_text())
     scores = get_catalog().load_table("gold.scores").scan(row_filter=EqualTo("kind", "backtest")).to_pandas()
+    scores = backtest.common_rows(scores)
     reg = registry.load()
     con = duckdb.connect()
     data = dict(

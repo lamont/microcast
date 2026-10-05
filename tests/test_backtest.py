@@ -66,3 +66,14 @@ def test_corrected_models_beat_raw_on_a_biased_baseline():
     assert f.schema == FORECASTS_SCHEMA.as_arrow() and s.schema == SCORES_SCHEMA.as_arrow()
     monthly = backtest.monthly_skill(scored)
     assert set(monthly.columns) >= {"variable", "month", "model", "skill", "n"}
+
+
+def test_models_are_compared_on_common_rows_only():
+    scored = backtest.run(_gold(), ["raw_hrrr", "bias_rolling"], ["t2m"], log=lambda _: None)
+    # bias_rolling loses a week of forecasts (say its input station was down).
+    gap = (scored.model_name == "bias_rolling") & (scored.valid_time.dt.month == 8) & (scored.valid_time.dt.day <= 7)
+    kept = scored[~gap]
+    board = backtest.leaderboard(kept, n_boot=50)
+    n = board[(board.point == "all")].groupby("model").n.sum()
+    # The baseline is scored only where the challenger also forecast.
+    assert n["raw_hrrr"] == n["bias_rolling"] == (kept.model_name == "bias_rolling").sum()

@@ -127,6 +127,21 @@ def to_tables(scored: pd.DataFrame) -> tuple[pa.Table, pa.Table]:
 # --- leaderboard ------------------------------------------------------------------
 
 
+KEY = ["variable", "point_id", "init_time", "lead_min"]
+
+
+def common_rows(scores: pd.DataFrame) -> pd.DataFrame:
+    """Only forecasts every model made, so models are compared on identical cases.
+
+    A model that needs an input some rows lack (a station that came online
+    later, a feature with gaps) forecasts fewer rows; without this it would be
+    scored on an easier or harder subset than its rivals.
+    """
+    n_models = scores.groupby("variable").model_name.transform("nunique")
+    per_key = scores.groupby(KEY).model_name.transform("nunique")
+    return scores[per_key == n_models]
+
+
 def _paired(scores: pd.DataFrame, model: str) -> pd.DataFrame:
     """Model rows joined to baseline rows for the same forecast."""
     key = ["variable", "point_id", "init_time", "lead_min"]
@@ -148,8 +163,8 @@ def bootstrap_skill(paired: pd.DataFrame, n: int = 1000, seed: int = 7) -> tuple
 
 
 def leaderboard(scores: pd.DataFrame, n_boot: int = 1000) -> pd.DataFrame:
-    """One row per (variable, model, lead bucket, point or 'all')."""
-    scores = scores.assign(bucket=lead_bucket(scores.lead_min))
+    """One row per (variable, model, lead bucket, point or 'all'), on common rows only."""
+    scores = common_rows(scores).assign(bucket=lead_bucket(scores.lead_min))
     rows = []
     for model in sorted(scores.model_name.unique()):
         paired = _paired(scores, model)
@@ -177,6 +192,7 @@ def leaderboard(scores: pd.DataFrame, n_boot: int = 1000) -> pd.DataFrame:
 
 def monthly_skill(scores: pd.DataFrame) -> pd.DataFrame:
     """Skill vs baseline per month (of the forecast cycle): performance over time."""
+    scores = common_rows(scores)
     rows = []
     for model in sorted(scores.model_name.unique()):
         paired = _paired(scores, model)

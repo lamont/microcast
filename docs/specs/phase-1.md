@@ -49,16 +49,29 @@ rolling monthly folds).
   `data/reports/`. `microcast compare` prints the leaderboard.
 - [x] **Status site:** `microcast site` builds Status + Analytics pages (D8).
 
+## Done (2026-10-05, later)
+
+- [x] **Synoptic:** `microcast ingest synoptic` for 604PG (Golden Gate Park)
+  and five Castro-area CWOP stations; free tier = last 7 days, so they
+  accrue (D10). First pull: 43,477 obs.
+- [x] **PurpleAir LAN:** the outdoor PA-II is confirmed and polled; a fouled
+  B channel is range-flagged; curl fallback for macOS Local Network privacy (D5).
+- [x] **Lake portability:** `microcast lake copy --to <catalog>` (D11).
+- [x] **Fair comparison:** leaderboard, monthly skill and the site use only
+  forecasts every model made (D11).
+- [ ] **HRRR hourly fill** (`--stride 1`) running; then rebuild silver/gold,
+  rerun the backtest and the site, and update Results below.
+
 ## Next
 
-1. Fill the remaining HRRR cycles: `microcast backfill hrrr --start
-   2025-04-01 --end 2026-10-01 --stride 1`, then rebuild and rerun.
-2. Synoptic token for in-city mesonet stations (Castro, Sunset, Ocean
-   Beach), so wind and the marine-layer push are verified inside SF.
-3. Backyard station (D5) and PurpleAir live polling; start accruing truth at
-   the house.
-4. First look at `lcc` vs GOES low cloud for D2.
-5. Host the status site at weather.henry.st.
+1. Finish the hourly HRRR fill, rebuild, rerun, refresh the site.
+2. Collectors on a schedule: Synoptic daily, PurpleAir LAN every 2 min,
+   HRRR live ingest hourly (the first k3s CronJobs on the swarm cluster).
+3. HRRR at the Synoptic stations: a points-only pass for the weeks they have
+   obs (D10), then they enter backtests once ~4 months have accrued.
+4. Backyard station (D5); confirm the model first.
+5. First look at `lcc` and DSWRF vs the CWOP solar sensors for D2.
+6. Status site on k3s, internal at weather.henry.st (D8).
 
 ## Not in phase 1
 

@@ -260,8 +260,13 @@ for this one service): the built files in an nginx container behind the
 cluster's Traefik ingress for `weather.henry.st`, rebuilt by a job after each
 backtest (later, each live scoring run).
 
+**Internal only for now** (decided 2026-10-05): `weather.henry.st` resolves
+on the home network through the cluster's Traefik; an external Traefik
+endpoint comes later. The privacy rule below still applies, so going public
+later is a DNS/ingress change, not a content review.
+
 **Changes the design.** The design kept everything behind Tailscale. The
-status site is meant to be reachable at a public name, so it carries a
+status site is meant to become reachable at a public name, so it carries a
 privacy rule: it shows station ids, place ids and aggregate scores only,
 never coordinates, the PurpleAir index or route geometry. Dagster and MLflow
 stay private.
@@ -297,10 +302,48 @@ exposure, not open-terrain truth; 604PG and Fort Point are the wind truth for
 the ride. Auth: Synoptic issues an API key, and requests need a token
 generated from it (`/v2/auth`); `.env` holds both.
 
+**Account.** The Synoptic account is a 14-day trial (from 2026-10-05), and the
+trial was refused history too. Check what the account becomes when it ends:
+if the daily pull stops working, these stations stop accruing. If a paid
+month with history is ever bought, pull 2025-04 → now for these six stations
+in one go (matching the HRRR backfill); that puts them straight into
+backtests instead of waiting ~4 months (3 training + 1 test).
+
 **For code.** Stations added after a cycle was backfilled have no HRRR rows
 for it, and a rerun skips the cycle because its batch id is already recorded.
 Before these stations enter a backtest, backfill HRRR for just the new points
 over the weeks they have obs (a points-only pass with its own batch ids).
+
+## D11 · Moving the lake, stations coming and going, fair comparison
+
+*2026-10-05*
+
+**Laptop → cluster.** Iceberg metadata records absolute file paths
+(`file:///Users/...`), so the lake can't be moved by copying `data/`. `microcast
+lake copy --to <catalog>` re-appends bronze row for row, a month per snapshot,
+into any configured catalog (Lakekeeper + MinIO on the cluster), resumably.
+Rows keep `ingest_batch` and `ingested_at`, so backtests replay the same
+as-of view. Silver and gold are rebuilt there. Snapshot ids and history don't
+carry over, so rerun the backtest in the cluster to re-pin MLflow runs. The
+laptop stays the proving ground until then.
+
+**Stations are modular.** Every model works per row, one row per (station,
+cycle, lead), and pools stations with the station id as a categorical
+feature. A station appearing or disappearing adds or removes rows; nothing
+else changes. A variable a station doesn't report (gust at SFOC1) is a null
+LightGBM handles natively. A new station starts with no rolling bias (null for
+its first 14 days) and an unseen category, so it gets the pooled correction
+until it has its own history. Phase 3's network features (upwind stations as
+inputs) will add dependence on other stations: those features are null when
+the station is down, and training will randomly drop stations so the model
+has seen that.
+
+**Fair comparison.** All models share the same folds and are scored only on
+the forecasts every model made (`backtest.common_rows`), with skill paired
+row by row against raw HRRR. A model needing an input that some rows lack is
+judged on the subset it can forecast, and its rivals on that same subset.
+Live scoring (phase 4) follows the same rule over whatever window all compared
+models were running, which daily collectors keep growing.
 
 ## Open
 
@@ -312,7 +355,6 @@ over the weeks they have obs (a points-only pass with its own batch ids).
   Ecowitt report W/m² and push locally. Confirm before building the ingest.
 - Confirm the PurpleAir index in `.env` is the outdoor sensor (one API call
   with a read key; the LAN `/json` doesn't report the index). Clean channel B.
-- How weather.henry.st reaches the internet from the swarm cluster (port
-  forward, or a tunnel), and where the lake lives there.
+- External endpoint for weather.henry.st (later, via Traefik).
 - REFS products available through Herbie: `mean, sprd, pmmn, lpmm, avrg, prob,
   eas, ffri`. Check whether `prob` covers the rain and wind exceedances we need.
