@@ -20,14 +20,35 @@ routes:
     sample_every_m: 200
     mode: walk
     schedule:
-      - {days: [mon, tue, wed, thu, fri], window: "08:00-08:25"}
+      - {days: [mon, tue, wed, thu, fri], window: "07:45-08:25"}
       - {days: [mon, tue, wed, thu, fri], window: "15:15-15:40"}
     audience: [kids, lamont]
 
-  - id: ocean_beach_ride
+  - id: gg_park_ride
     kind: route
-    geometry: routes/examples/ob_loop.geojson # Great Highway out, Sunset Blvd back
+    # Divisadero & Fell, Panhandle, JFK Drive to the Great Highway (~6.3 km).
+    geometry: routes/examples/gg_park_jfk.geojson
     sample_every_m: 500
+    out_and_back: true # ridden back along the same path; return leg reverses bearings
     mode: bike
-    flexible_departure: {earliest: "09:00", latest: "16:00", duration_min: 90}
+    flexible_departure: {earliest: "09:00", latest: "16:00", duration_min: 75}
     audience: [lamont]
+
+# Ground-truth stations. Each becomes a virtual point (point_id = station id) so
+# NWP is extracted at the station itself and residuals are learnt there. Phase 1
+# trains on these until the home station exists (docs/decisions.md D5).
+stations:
+  - {id: SFOC1, source: iem_hads, lat: 37.7705, lon: -122.4269, note: "SF Downtown (the Mint), ~1 km from home; hourly temp"}
+  - {id: KSFO, source: iem_asos, lat: 37.6190, lon: -122.3749, note: "SFO ASOS; temp, dewpoint, wind, gust"}
+  - {id: KOAK, source: iem_asos, lat: 37.7178, lon: -122.2330, note: "Oakland ASOS; temp, dewpoint, wind, gust"}
+  - {id: FTPC1, source: ndbc, lat: 37.8060, lon: -122.4660, note: "Fort Point, Golden Gate; temp, wind, gust, upwind of the park"}
+
+# Sensors we own. Identifiers that would locate the house live in .env.
+sensors:
+  - id: purpleair_home
+    kind: purpleair
+    sensor_index: ${MICROCAST_PURPLEAIR_SENSOR_INDEX}
+    note: public map location is snapped to the nearest corner; poll the LAN /json when on the home network
+  - id: station_home
+    kind: weather_station
+    status: planned # wifi station for the back yard; must report solar radiation (D2) and wind

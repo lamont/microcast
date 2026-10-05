@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Microcast Status</title>
+  <meta name="description" content="Hyperlocal San Francisco forecasts: backtest results against raw HRRR, and pipeline status.">
+  <link rel="stylesheet" href="site.css">
+</head>
+<body data-page="status">
+<main>
+  <header class="top">
+    <h1>microcast</h1>
+    <nav><a href="index.html" aria-current="page">Status</a><a href="analytics.html">Analytics</a></nav>
+  </header>
+  <p class="lede">Hyperlocal forecasts for a few San Francisco places and routes. Each model corrects HRRR,
+    NOAA's hourly 3 km forecast, using what nearby stations have actually measured. Every score below compares
+    it against raw HRRR on the same forecasts.</p>
+
+  <h2>Phase 1 gate</h2>
+  <p class="sub">The residual model must beat raw HRRR at 1–6 h leads, with a 95% confidence interval that excludes zero.
+    Skill = 1 − CRPS(model) / CRPS(raw HRRR); higher is better.</p>
+  <div id="gate"></div>
+
+  <h2>Leaderboard</h2>
+  <p class="sub">Rolling monthly backtests: each month is forecast by models trained only on earlier months.
+    Pooled over the stations. CRPS is the error of the whole forecast distribution, in the target's units.
+    80% cover should be close to 80%.</p>
+  <div id="leaderboard"></div>
+
+  <h2>Performance over time</h2>
+  <p class="sub">Skill against raw HRRR for each test month. The gray line at zero is raw HRRR itself.</p>
+  <div id="monthly"></div>
+
+  <h2>Data freshness</h2>
+  <p class="sub">What is in the lake right now: ground-truth stations, HRRR coverage, and table sizes.</p>
+  <div id="freshness"></div>
+
+  <footer></footer>
+</main>
+<script src="site.js"></script>
+</body>
+</html>

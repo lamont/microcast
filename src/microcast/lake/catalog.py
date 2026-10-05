@@ -15,6 +15,7 @@ Write rules (docs/decisions.md, D1):
 
 from __future__ import annotations
 
+import warnings
 from functools import cache
 
 import duckdb
@@ -73,15 +74,38 @@ def _conform(table: Table, data: pa.Table) -> pa.Table:
     return data.select(table.schema().column_names).cast(table.schema().as_arrow())
 
 
-def append_bronze(identifier: str, data: pa.Table, catalog: Catalog | None = None) -> int | None:
-    """Append rows to a bronze table; returns the new snapshot id."""
+BATCHES_PROPERTY = "microcast.ingest-batches"
+
+
+def append_bronze(
+    identifier: str, data: pa.Table, catalog: Catalog | None = None, batches: list[str] | None = None
+) -> int | None:
+    """Append rows to a bronze table; returns the new snapshot id.
+
+    ``batches`` (the ``ingest_batch`` ids in this append) is recorded in the
+    snapshot summary so a backfill can resume without scanning the table. A
+    backfill groups many batches into one append to keep snapshot count and
+    metadata size down; each row still carries its own ``ingest_batch``.
+    """
     if not identifier.startswith("bronze."):
         raise ValueError(f"append_bronze only writes bronze tables, got {identifier}")
     if data.num_rows == 0:
         return None
     table = (catalog or get_catalog()).load_table(identifier)
-    table.append(_conform(table, data))
+    props = {BATCHES_PROPERTY: ",".join(batches)} if batches else {}
+    table.append(_conform(table, data), snapshot_properties=props)
     return table.current_snapshot().snapshot_id
+
+
+def recorded_batches(identifier: str, catalog: Catalog | None = None) -> set[str]:
+    """Every ``ingest_batch`` id recorded in the table's snapshot summaries."""
+    table = (catalog or get_catalog()).load_table(identifier)
+    out: set[str] = set()
+    for snap in table.snapshots():
+        props = snap.summary.additional_properties if snap.summary else {}
+        if value := props.get(BATCHES_PROPERTY):
+            out.update(value.split(","))
+    return out
 
 
 def replace_partition(identifier: str, data: pa.Table, where: BooleanExpression, catalog: Catalog | None = None) -> int:
@@ -89,7 +113,10 @@ def replace_partition(identifier: str, data: pa.Table, where: BooleanExpression,
     if identifier.startswith("bronze."):
         raise ValueError("bronze is append-only; rebuild silver from it instead")
     table = (catalog or get_catalog()).load_table(identifier)
-    table.overwrite(_conform(table, data), overwrite_filter=where)
+    with warnings.catch_warnings():
+        # First build of a partition: there is nothing to delete, which PyIceberg warns about.
+        warnings.filterwarnings("ignore", "Delete operation did not match any records")
+        table.overwrite(_conform(table, data), overwrite_filter=where)
     return table.current_snapshot().snapshot_id
 
 

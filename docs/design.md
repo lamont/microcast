@@ -343,7 +343,7 @@ alerts:
     when: precip_prob >= 0.5
     send_after: "11:00"          # one decision, late enough to be confident
     audience: [kids, lamont]
-    template: "Good chance ({p:.0%}) of rain on the walk home, {window}. Grab a jacket."
+    template: "Good chance ({p:.0%}) of rain on the walk home, {window}. Hope you brought a raincoat."
 
   - id: westerly_ramp
     place: home
@@ -355,7 +355,7 @@ Noise controls, all mandatory: hysteresis (fire at 0.5, re-arm below 0.3), a coo
 
 **Delivery**
 
-- Home Assistant `notify` service (companion app on each phone) as the default, since it's already in the house. ntfy (self-hosted) as a fallback that needs no HA.
+- Slack `notify` service to individuals or family channel
 - A small read-only status page (FastAPI + one HTML page) showing each place's next 12 h, served from `serving.latest`.
 
 ## Deployment

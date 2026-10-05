@@ -8,6 +8,7 @@ from pyiceberg.catalog import load_catalog
 def _home_coords(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MICROCAST_HOME_LAT", "37.7609")
     monkeypatch.setenv("MICROCAST_HOME_LON", "-122.4350")
+    monkeypatch.setenv("MICROCAST_PURPLEAIR_SENSOR_INDEX", "12345")
 
 
 @pytest.fixture

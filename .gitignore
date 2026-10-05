@@ -25,3 +25,6 @@ routes/private/
 
 .DS_Store
 .ipynb_checkpoints/
+
+# Built status site (microcast site)
+/site/

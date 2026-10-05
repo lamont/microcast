@@ -15,8 +15,12 @@ def test_example_registry_loads():
     reg = registry.load(settings.REPO_ROOT / "config" / "places.yaml")
     ids = [vp.point_id for vp in reg.virtual_points()]
     assert ids[0] == "home"
-    assert "school_walk:0" in ids and "ocean_beach_ride:0" in ids
+    assert "school_walk:0" in ids and "gg_park_ride:0" in ids
+    assert {"SFOC1", "KSFO", "KOAK", "FTPC1"} <= set(ids)
     assert len(ids) == len(set(ids))
+    ride = next(r for r in reg.routes if r.id == "gg_park_ride")
+    assert ride.out_and_back
+    assert reg.sensors["purpleair_home"]["sensor_index"] == "12345"
     df = reg.points_df()
     assert list(df.columns) == ["latitude", "longitude", "id"]
 
@@ -24,6 +28,12 @@ def test_example_registry_loads():
 def test_missing_env_is_a_clear_error(monkeypatch):
     monkeypatch.delenv("MICROCAST_HOME_LAT")
     with pytest.raises(KeyError, match="MICROCAST_HOME_LAT"):
+        registry.load(settings.REPO_ROOT / "config" / "places.yaml")
+
+
+def test_lat_lon_pair_in_one_variable_is_a_clear_error(monkeypatch):
+    monkeypatch.setenv("MICROCAST_HOME_LAT", "37.76, -122.43")
+    with pytest.raises(ValueError, match="single number"):
         registry.load(settings.REPO_ROOT / "config" / "places.yaml")
 
 

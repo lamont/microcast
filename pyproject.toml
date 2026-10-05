@@ -23,7 +23,14 @@ dependencies = [
 [project.optional-dependencies]
 nwp = [
     "herbie-data>=2026.9.2",
+    "numcodecs>=0.17.0",
+    "requests>=2.34.2",
     "scikit-learn>=1.9.1",
+]
+ml = [
+    "lightgbm>=4.7.0",
+    "mlflow>=3.16.1",
+    "scipy>=1.18.1",
 ]
 
 [build-system]

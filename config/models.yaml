@@ -13,7 +13,7 @@ hrrr:
   # Low/total cloud cover and cloud base/ceiling drive the marine-layer
   # (low-cloud onset) target; see docs/decisions.md D2.
   search: >-
-    :(?:TMP|DPT|RH):2 m above|:(?:UGRD|VGRD):10 m above|:GUST:surface|:PRATE:surface|:VIS:surface|:HGT:cloud (?:base|ceiling)|:LCDC:low cloud layer|:TCDC:entire atmosphere
+    :(?:TMP|DPT|RH):2 m above|:(?:UGRD|VGRD):10 m above|:GUST:surface|:PRATE:surface|:VIS:surface|:HGT:cloud (?:base|ceiling)|:LCDC:low cloud layer|:TCDC:entire atmosphere|:DSWRF:surface
 
 hrrr_subh:
   enabled: false # phase 1 uses hourly sfc; turn on for onset timing

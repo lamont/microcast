@@ -1,0 +1,27 @@
+{
+  "type": "Feature",
+  "properties": {
+    "name": "Divisadero & Fell to Ocean Beach via the Panhandle and JFK Drive (outbound leg)",
+    "note": "Hand-traced to ~50 m; the route is ridden out and back on the same path (out_and_back in places.yaml). Replace with a GPX/OSM trace if segment-level wind matters."
+  },
+  "geometry": {
+    "type": "LineString",
+    "coordinates": [
+      [-122.43770, 37.77390],
+      [-122.44140, 37.77310],
+      [-122.44580, 37.77225],
+      [-122.45000, 37.77165],
+      [-122.45350, 37.77120],
+      [-122.45480, 37.77160],
+      [-122.46030, 37.77200],
+      [-122.46550, 37.77180],
+      [-122.47180, 37.77120],
+      [-122.47750, 37.77100],
+      [-122.48800, 37.77000],
+      [-122.49600, 37.77000],
+      [-122.49850, 37.76970],
+      [-122.50350, 37.76950],
+      [-122.50950, 37.76970]
+    ]
+  }
+}

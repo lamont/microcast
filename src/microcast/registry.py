@@ -61,19 +61,34 @@ class Route:
     schedule: list[dict[str, Any]] = field(default_factory=list)
     flexible_departure: dict[str, Any] | None = None
     audience: list[str] = field(default_factory=list)
+    out_and_back: bool = False
 
     def virtual_points(self) -> list[VirtualPoint]:
         return densify(self.id, self.geometry, self.sample_every_m)
 
 
 @dataclass
+class Station:
+    id: str
+    source: str  # which obs ingest serves it: iem_asos, iem_hads, ndbc
+    lat: float
+    lon: float
+
+    def virtual_points(self) -> list[VirtualPoint]:
+        return [VirtualPoint(self.id, self.id, 0, self.lat, self.lon, None)]
+
+
+@dataclass
 class Registry:
     places: list[Place]
     routes: list[Route]
+    stations: list[Station] = field(default_factory=list)
+    sensors: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def virtual_points(self) -> list[VirtualPoint]:
         points = [vp for p in self.places for vp in p.virtual_points()]
         points += [vp for r in self.routes for vp in r.virtual_points()]
+        points += [vp for s in self.stations for vp in s.virtual_points()]
         return points
 
     def points_df(self) -> pd.DataFrame:
@@ -136,6 +151,13 @@ def _load_line(path: Path) -> LineString:
     return geom
 
 
+def _coord(value: Any, what: str) -> float:
+    try:
+        return float(value)
+    except ValueError:
+        raise ValueError(f"{what} must be a single number, got {value!r} (one value per variable in .env)") from None
+
+
 def load(path: Path | None = None) -> Registry:
     path = path or settings.places_file()
     raw = _expand_env(yaml.safe_load(path.read_text()))
@@ -144,8 +166,8 @@ def load(path: Path | None = None) -> Registry:
     places = [
         Place(
             id=p["id"],
-            lat=float(p["lat"]),
-            lon=float(p["lon"]),
+            lat=_coord(p["lat"], f"{p['id']}.lat"),
+            lon=_coord(p["lon"], f"{p['id']}.lon"),
             sensors=p.get("sensors", []),
             variables=p.get("variables", []),
         )
@@ -160,10 +182,16 @@ def load(path: Path | None = None) -> Registry:
             schedule=r.get("schedule", []),
             flexible_departure=r.get("flexible_departure"),
             audience=r.get("audience", []),
+            out_and_back=bool(r.get("out_and_back", False)),
         )
         for r in raw.get("routes", [])
     ]
-    ids = [t.id for t in places] + [t.id for t in routes]
+    stations = [
+        Station(id=s["id"], source=s["source"], lat=_coord(s["lat"], s["id"]), lon=_coord(s["lon"], s["id"]))
+        for s in raw.get("stations", [])
+    ]
+    sensors = {s["id"]: s for s in raw.get("sensors", [])}
+    ids = [t.id for t in places] + [t.id for t in routes] + [t.id for t in stations]
     if dupes := {i for i in ids if ids.count(i) > 1}:
         raise ValueError(f"duplicate registry ids: {sorted(dupes)}")
-    return Registry(places, routes)
+    return Registry(places, routes, stations, sensors)

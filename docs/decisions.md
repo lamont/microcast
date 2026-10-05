@@ -118,11 +118,163 @@ planned, unlike visibility.
   live in `routes/private/` with a `config/places.local.yaml`, both git-ignored.
   Home coordinates come from `.env`.
 
+## D4 · Bike route: Golden Gate Park out and back, replacing the Ocean Beach loop
+
+*2026-10-04*
+
+**Decision.** The bike use case is now Divisadero & Fell → the Panhandle → JFK
+Drive → the Great Highway at Ocean Beach, and back the same way (~6.3 km each
+way). Registry id `gg_park_ride`, geometry `routes/examples/gg_park_jfk.geojson`,
+`duration_min` 75. The old Great Highway / Sunset Blvd loop is gone.
+
+**For code.** Routes gain `out_and_back: true`: the outbound line is sampled
+once (14 points at 500 m); the return leg reuses those points with the bearing
+reversed, so the westerly that is a headwind on the way out is scored as a
+tailwind home. Ride-window scoring (phase 4) evaluates both legs: the
+question is still "leave by when, for a tailwind home".
+
+## D5 · Ground truth before the home station; own sensors
+
+*2026-10-04*
+
+**Decision.**
+
+- **Truth stations are registry points.** `places.yaml` gains a `stations:`
+  list; each station is a virtual point (`point_id` = station id), so NWP is
+  extracted at the station and residuals are learned there. Phase 1 uses four
+  free, keyless sources:
+
+  | Station | Where | Source | Variables |
+  | --- | --- | --- | --- |
+  | SFOC1 | SF Downtown (the Mint), ~1 km from home | IEM HADS | hourly temp |
+  | KSFO | SFO | IEM ASOS | temp, dewpoint, wind, gust |
+  | KOAK | Oakland | IEM ASOS | temp, dewpoint, wind, gust |
+  | FTPC1 | Fort Point, Golden Gate | NDBC | temp, wind, gust |
+
+  SFOC1 is the house's stand-in for temperature until the backyard station
+  exists. There is no wind truth inside the city yet, so the gust target is
+  learned at SFO, Oakland and Fort Point. Synoptic (CWOP/mesonet in the
+  Castro and the Sunset) needs a free token and is the next source to add.
+- **Own PurpleAir sensor.** Listed on the public map with its location
+  snapped to a nearby corner; its map name is kept out of git too. The sensor index lives in `.env`
+  (`MICROCAST_PURPLEAIR_SENSOR_INDEX`), never in git, since index + "home"
+  locates the house. Rows use `station_id = purpleair_home`. Polled on the LAN
+  (`MICROCAST_PURPLEAIR_HOST`, free) or backfilled through the API
+  (`PURPLEAIR_API_KEY`). Its temperature reads hot and is a trend feature only.
+  The index (in `.env`) comes from the widget embed code and has not been
+  checked against the API yet. **LAN, confirmed 2026-10-05:** the outdoor sensor reports
+  `place: outside` and two laser counters (PMSX003 A + B). A second, indoor
+  PurpleAir is single-channel and is not ingested. Channel B outdoors
+  was fouled (3,334 µg/m³ vs 4.6 on A, 47× the 0.3 µm count), so silver
+  range-flags PM channels above 1,000 µg/m³ and PM2.5 comes from A alone until
+  B is cleaned. With one good channel there is no A/B agreement check, so PM
+  data from this period is single-sensor quality. Give the sensor a DHCP
+  reservation so the LAN host stays put. On macOS, Local Network privacy
+  blocks uv's and Homebrew's Pythons (ad-hoc signed, no stable identity, so
+  there is no prompt and no way to grant it), while Apple's curl is allowed.
+  `fetch_local` falls back to `/usr/bin/curl` on that error; a poller on the
+  NAS or cluster takes the normal path. It also refuses a sensor that doesn't
+  report `place: outside`.
+- **Backyard station (planned).** A wifi station away from the house, which
+  gives better temperature than anything near a wall, plus wind, plus solar
+  radiation for the clear-sky index in D2. Requirements: solar radiation (W/m²
+  ideally; lux works with a rough conversion), wind speed and gust, and data
+  readable locally or by push to our own endpoint rather than only through a
+  vendor cloud. Model still to be confirmed (see Open).
+
+## D6 · HRRR history from the hrrrzarr archive
+
+*2026-10-05*
+
+**Decision.** Backfill HRRR from the University of Utah Zarr archive
+(`s3://hrrrzarr`, anonymous HTTPS) instead of GRIB through Herbie.
+`ingest.hrrr_zarr` writes the same rows as `ingest.nwp` (same `model`,
+`product`, `variable`, `level`, neighbour cells and ranks); only
+`ingest_batch` (`hrrrzarr/<cycle>`) tells them apart. Live ingest stays on
+Herbie/GRIB, since the archive lags by about a day.
+
+**Why.** Each Zarr chunk holds every forecast hour of a cycle for a 150×150
+tile: a cycle at our points is 26 small GETs (~16 MB), against ~20 MB of GRIB
+per forecast hour. Measured: 7.5 s per cycle for f00–f06 serially vs 66 s, and
+~1 cycle/s with 24 workers (bandwidth-bound). The archive also has DSWRF
+(downward solar) for D2, now in the GRIB search too.
+
+**Verified.** For 2025-07-15 21Z, f00–f06, all 12 fields: identical values,
+cells and neighbour ranks to the Herbie path (`max |diff| = 0`).
+
+**Amends D1, for backfill only.** One bronze append covers 96 cycles (one
+snapshot each), not one per batch, to keep snapshot count and metadata small.
+Rows still carry their own `ingest_batch`. The batch ids of each append are
+recorded in the snapshot summary (`microcast.ingest-batches`), which is how a
+rerun resumes without scanning bronze.
+
+**Backfill order.** First every third cycle with the kept hour rotating daily
+(`hrrr_zarr.cycles(stride_h=3)`), so every lead sees every hour of the day,
+then `--stride 1` fills the rest. The archive has occasional missing cycles
+(40 of 4,287 in the first pass, mostly the 23Z forecast since February 2026);
+they are logged, and a rerun or the GRIB path can fill them.
+
+## D7 · Evaluation details for phase 1
+
+*2026-10-05*
+
+- **Issue time and lead 0.** HRRR history is "issued" at init + 55 min. Lead 0
+  verifies before it is issued, so it is a hindcast: it is a feature source
+  (HRRR's own error at the cycle time) but never scored. The gate is judged on
+  leads 1–6, which are ~5 min to ~5 h ahead of issue.
+- **Every model outputs a Gaussian**, including raw HRRR, whose sigma is its
+  historical RMS error by lead. A point forecast's CRPS is its MAE, which would
+  flatter any probabilistic challenger.
+- **`gold.training_examples` is wide**: one row per (point, cycle, lead) with
+  a nullable target column per variable (`obs_t2m`, `obs_gust`), not one row
+  per target variable as the design sketched. Same information, half the
+  joins.
+- **Gust truth** is the reported gust, else the sustained wind (ASOS reports a
+  gust only when it is gusting). Observations are snapped to the report nearest
+  the top of the hour within ±20 min.
+- **Rolling bias** (model 1) is the trailing 14-day mean error at the same
+  point and lead, over residuals verified before issue time. It is also a
+  feature for the GBM.
+- **Skill CI** is a day-block bootstrap (whole days resampled, 1000 draws).
+
+## D8 · Status site at weather.henry.st
+
+*2026-10-05*
+
+**Decision.** The status page is a static site at `weather.henry.st` with two
+pages: **Status** (phase gate, leaderboard, monthly skill vs raw HRRR, data
+freshness) and **Analytics** (skill by lead and station, error by hour of day,
+PIT calibration, raw HRRR's error by month × hour). `microcast site --out
+site/` builds it from the lake and the last backtest into plain files
+(`index.html`, `analytics.html`, `data.json`, CSS/JS, no dependencies), so any
+static host works. Once live inference exists (phase 4) the same pages gain
+the next-12-hour forecast panel the design described, read from
+`serving.latest`.
+
+**Changes the design.** The design kept everything behind Tailscale. The
+status site is meant to be reachable at a public name, so it carries a
+privacy rule: it shows station ids, place ids and aggregate scores only,
+never coordinates, the PurpleAir index or route geometry. Dagster and MLflow
+stay private.
+
+## D9 · Alerts go to Slack
+
+*2026-10-04*
+
+Alerts are delivered to individuals or a family channel on Slack, in place of
+the Home Assistant `notify` service and ntfy fallback (edited in
+`design.md`, Delivery). The phase 4 alert engine targets Slack first.
+
 ## Open
 
 - RRFS/REFS operational date (Oct 6 vs Oct 14, 2026) is still unverified. Herbie
   2026.9.2 ships `rrfs` and `refs` templates on `noaa-rrfs-ops-pds`.
-- Tempest vs Ecowitt: both report solar radiation, which D2 depends on.
-  Tempest's solar sensor and 1-min cadence suit the clear-sky index.
+- Backyard station model (D5). It was described as an "AccuWeather" wifi
+  station; if that's an AcuRite (e.g. Atlas), it reports light in lux and UV,
+  not W/m², and local capture needs rtl_433 or the Access hub. Tempest and
+  Ecowitt report W/m² and push locally. Confirm before building the ingest.
+- Confirm the PurpleAir index in `.env` is the outdoor sensor (one API call
+  with a read key; the LAN `/json` doesn't report the index). Clean channel B.
+- Hosting for weather.henry.st (NAS behind a tunnel, or a static bucket/CDN).
 - REFS products available through Herbie: `mean, sprd, pmmn, lpmm, avrg, prob,
   eas, ffri`. Check whether `prob` covers the rain and wind exceedances we need.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Annotated
 
 import typer
 
@@ -11,8 +12,12 @@ from microcast import registry as registry_mod
 app = typer.Typer(no_args_is_help=True, help="Hyperlocal forecast post-processing.")
 lake_app = typer.Typer(no_args_is_help=True, help="Iceberg lake management.")
 ingest_app = typer.Typer(no_args_is_help=True, help="Ingest data into bronze.")
+backfill_app = typer.Typer(no_args_is_help=True, help="Backfill history into bronze (resumable).")
+build_app = typer.Typer(no_args_is_help=True, help="Rebuild silver and gold from the layer below.")
 app.add_typer(lake_app, name="lake")
 app.add_typer(ingest_app, name="ingest")
+app.add_typer(backfill_app, name="backfill")
+app.add_typer(build_app, name="build")
 
 
 def _parse_leads(spec: str | None) -> list[int] | None:
@@ -80,6 +85,147 @@ def ingest_nwp(
     table = fetch_cycle(cfg, init_dt, registry_mod.load(), leads=_parse_leads(leads))
     snap = append_bronze("bronze.nwp_point", table)
     typer.echo(f"{model} {init_dt:%Y-%m-%dT%HZ}: {table.num_rows} rows -> snapshot {snap}")
+
+
+@ingest_app.command("obs")
+def ingest_obs(
+    start: str = typer.Option("2025-04-01", help="First day (ISO date)"),
+    end: str = typer.Option(None, help="Stop before this day (ISO date); default tomorrow"),
+    station: Annotated[list[str] | None, typer.Option(help="Station id(s) from the registry; default all")] = None,
+) -> None:
+    """Station observations (IEM ASOS/HADS, NDBC) into bronze.obs, a month per batch."""
+    from datetime import date
+
+    from microcast.ingest.obs import backfill
+    from microcast.lake.catalog import init_lake
+
+    init_lake()
+    stations = [s for s in registry_mod.load().stations if not station or s.id in station]
+    last = date.fromisoformat(end) if end else date.today() + timedelta(days=1)
+    stats = backfill(stations, date.fromisoformat(start), last, log=typer.echo)
+    typer.echo(", ".join(f"{k} {v}" for k, v in stats.items()))
+
+
+@ingest_app.command("purpleair")
+def ingest_purpleair(
+    history_days: int = typer.Option(0, help="Backfill N days via the PurpleAir API (needs PURPLEAIR_API_KEY)"),
+) -> None:
+    """Own PurpleAir sensor: one LAN reading (default), or API history."""
+    from microcast.ingest import purpleair
+    from microcast.ingest.obs import to_arrow
+    from microcast.lake.catalog import append_bronze, init_lake
+
+    init_lake()
+    now = datetime.now(UTC)
+    if history_days:
+        index = int(registry_mod.load().sensors["purpleair_home"]["sensor_index"])
+        for d in range(history_days, 0, -2):  # the API returns ~2 days of 10-min averages per call
+            start, end = now - timedelta(days=d), now - timedelta(days=max(d - 2, 0))
+            df = purpleair.fetch_history(index, start, end)
+            bid = f"purpleair/history/{start:%Y-%m-%dT%H}"
+            append_bronze("bronze.obs", to_arrow(df, bid), batches=[bid])
+            typer.echo(f"  {bid}: {len(df)} rows")
+    else:
+        df = purpleair.fetch_local()
+        bid = f"purpleair/local/{now:%Y-%m-%dT%H:%M}"
+        append_bronze("bronze.obs", to_arrow(df, bid), batches=[bid])
+        typer.echo(f"{bid}: {len(df)} rows")
+
+
+@backfill_app.command("hrrr")
+def backfill_hrrr(
+    start: str = typer.Option(..., help="First cycle (ISO date/time, UTC)"),
+    end: str = typer.Option(..., help="Stop before this cycle (ISO date/time, UTC)"),
+    leads: str = typer.Option("0-6", help="'0-6' or '0,1,3'"),
+    stride: int = typer.Option(1, help="Keep one cycle in N (rotating hour, see hrrr_zarr.cycles)"),
+    workers: int = typer.Option(16, help="Parallel cycle fetches"),
+    commit_every: int = typer.Option(48, help="Cycles per bronze append (one snapshot each)"),
+) -> None:
+    """HRRR history from the hrrrzarr archive into bronze.nwp_point."""
+    from microcast.ingest.hrrr_zarr import backfill
+    from microcast.lake.catalog import init_lake
+
+    init_lake()
+    stats = backfill(
+        registry_mod.load(),
+        _parse_init(start),
+        _parse_init(end),
+        _parse_leads(leads),
+        stride_h=stride,
+        workers=workers,
+        commit_every=commit_every,
+        log=typer.echo,
+    )
+    typer.echo(", ".join(f"{k} {v}" for k, v in stats.items()))
+
+
+@build_app.command("silver")
+def build_silver(
+    start: str = typer.Option("2025-04-01", help="First month (ISO date)"),
+    end: str = typer.Option(None, help="Stop before this day; default tomorrow"),
+) -> None:
+    """Rebuild silver.nwp_aligned and silver.obs_qc month by month."""
+    from datetime import date
+
+    from microcast.lake.catalog import init_lake
+    from microcast.transform import silver
+
+    init_lake()
+    last = date.fromisoformat(end) if end else date.today() + timedelta(days=1)
+    silver.rebuild(date.fromisoformat(start), last, log=typer.echo)
+
+
+@build_app.command("gold")
+def build_gold() -> None:
+    """Rebuild gold.training_examples at every registry station."""
+    from microcast.transform import gold
+
+    stations = [s.id for s in registry_mod.load().stations]
+    typer.echo(f"gold.training_examples: {gold.rebuild(stations)} rows")
+
+
+@app.command("backtest")
+def backtest_cmd(
+    models: str = typer.Option("raw_hrrr,bias_rolling,gbm_residual", help="Comma-separated model names"),
+    targets: str = typer.Option("t2m,gust", help="Comma-separated targets"),
+) -> None:
+    """Rolling monthly backtests -> gold.forecasts, gold.scores, MLflow, data/reports/."""
+    from microcast.pipeline import run_backtests
+
+    board, _ = run_backtests(models.split(","), targets.split(","), log=typer.echo)
+    _print_board(board)
+
+
+@app.command("compare")
+def compare(point: str = typer.Option("all", help="Station id, or 'all'")) -> None:
+    """Print the last backtest leaderboard (skill vs raw HRRR, 95% CI)."""
+    import pandas as pd
+
+    from microcast.pipeline import reports_dir
+
+    _print_board(pd.read_csv(reports_dir() / "leaderboard.csv"), point)
+
+
+@app.command("site")
+def site_cmd(out: str = typer.Option("site", help="Output directory")) -> None:
+    """Build the static status site (index + analytics) from the lake and last backtest."""
+    from pathlib import Path
+
+    from microcast.site import build
+
+    typer.echo(f"site written to {build(Path(out))}/")
+
+
+def _print_board(board, point: str = "all") -> None:
+    rows = board[board.point == point].sort_values(["variable", "lead", "skill"], ascending=[True, True, False])
+    typer.echo(
+        f"{'target':6} {'lead':6} {'model':14} {'n':>7} {'CRPS':>6} {'MAE':>6} {'bias':>6} {'cov80':>5}  skill [95% CI]"
+    )
+    for r in rows.itertuples():
+        typer.echo(
+            f"{r.variable:6} {r.lead:6} {r.model:14} {r.n:7d} {r.crps:6.3f} {r.mae:6.3f} {r.bias:+6.2f} "
+            f"{r.coverage_80:5.2f}  {r.skill:+.3f} [{r.skill_lo:+.3f}, {r.skill_hi:+.3f}]"
+        )
 
 
 if __name__ == "__main__":

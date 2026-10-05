@@ -40,7 +40,7 @@ def _rows(batch: str, value: float, n: int = 3) -> pa.Table:
 
 
 def test_init_is_idempotent(catalog):
-    assert set(lake.init_lake(catalog)) == {"bronze.nwp_point", "bronze.obs"}
+    assert {"bronze.nwp_point", "bronze.obs", "gold.scores"} <= set(lake.init_lake(catalog))
     assert lake.init_lake(catalog) == []
 
 

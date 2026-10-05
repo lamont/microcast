@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Microcast Analytics</title>
+  <meta name="description" content="Where and when microcast's models beat raw HRRR: by lead, station, hour, and calibration.">
+  <link rel="stylesheet" href="site.css">
+</head>
+<body data-page="analytics">
+<main>
+  <header class="top">
+    <h1>microcast</h1>
+    <nav><a href="index.html">Status</a><a href="analytics.html" aria-current="page">Analytics</a></nav>
+  </header>
+  <p class="lede">Breakdowns of the backtest: where, when and how the models beat raw HRRR.</p>
+
+  <h2>Skill by lead time</h2>
+  <p class="sub">Forecasts are issued 55 minutes after the HRRR cycle, so a 1 h lead is a short nowcast and 6 h is about five hours ahead.</p>
+  <div id="by-lead"></div>
+
+  <h2>Skill by station</h2>
+  <p class="sub">Dot = skill vs raw HRRR, whisker = 95% day-block bootstrap interval. SFOC1 (SF Downtown) is the stand-in for the house until the backyard station is up.</p>
+  <div id="by-station"></div>
+
+  <h2>Error by time of day</h2>
+  <p class="sub">Mean absolute error of the forecast mean, by valid hour (Pacific time). The marine layer and the afternoon sea breeze both show up here.</p>
+  <div id="by-hour"></div>
+
+  <h2>Calibration</h2>
+  <p class="sub">PIT histograms: where each observation fell in its forecast distribution. Flat at 10% is calibrated;
+    a U shape means overconfident, a hump means too cautious, a slope means biased.</p>
+  <div id="pit"></div>
+
+  <h2>Where HRRR goes wrong</h2>
+  <p class="sub">Raw HRRR's average error by month and hour of day. This is the pattern the models learn to remove.</p>
+  <div id="raw-bias"></div>
+
+  <footer></footer>
+</main>
+<script src="site.js"></script>
+</body>
+</html>
