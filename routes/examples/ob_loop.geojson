@@ -1,0 +1,14 @@
+{
+  "type": "Feature",
+  "properties": {"name": "Ocean Beach loop: Great Highway south, Sunset Blvd north (example)"},
+  "geometry": {
+    "type": "LineString",
+    "coordinates": [
+      [-122.50970, 37.76460],
+      [-122.50700, 37.73540],
+      [-122.49480, 37.73530],
+      [-122.49460, 37.76470],
+      [-122.50970, 37.76460]
+    ]
+  }
+}

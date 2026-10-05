@@ -1,0 +1,51 @@
+[project]
+name = "microcast"
+version = "0.1.0"
+description = "Hyperlocal forecast post-processing for named places and routes in San Francisco"
+authors = [
+    { name = "Lamont Lucas", email = "lamont@fastrobot.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "duckdb>=1.5.6",
+    "numpy>=2.5.3",
+    "pandas>=3.0.6",
+    "pyarrow>=25.0.1",
+    "pyiceberg[pyarrow,pyiceberg-core,sql-sqlite]>=0.12.0",
+    "pyproj>=3.8.0",
+    "python-dotenv>=1.2.4",
+    "pyyaml>=6.0.3",
+    "shapely>=2.1.2",
+    "typer>=0.27.2",
+    "xarray>=2026.9.0",
+]
+
+[project.optional-dependencies]
+nwp = [
+    "herbie-data>=2026.9.2",
+    "scikit-learn>=1.9.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.10",
+]
+
+[project.scripts]
+microcast = "microcast.cli:app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

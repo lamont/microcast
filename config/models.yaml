@@ -1,0 +1,62 @@
+# NWP models to ingest. Each key becomes the `model` column in bronze.nwp_point.
+# `search` is a Herbie/wgrib2 .idx regex: only matching GRIB messages are
+# downloaded (byte-range requests), so keep it tight.
+#
+# leads: [first, last, step] in hours, inclusive.
+
+hrrr:
+  enabled: true
+  herbie_model: hrrr
+  product: sfc
+  cadence_h: 1
+  leads: [0, 18, 1]
+  # Low/total cloud cover and cloud base/ceiling drive the marine-layer
+  # (low-cloud onset) target; see docs/decisions.md D2.
+  search: >-
+    :(?:TMP|DPT|RH):2 m above|:(?:UGRD|VGRD):10 m above|:GUST:surface|:PRATE:surface|:VIS:surface|:HGT:cloud (?:base|ceiling)|:LCDC:low cloud layer|:TCDC:entire atmosphere
+
+hrrr_subh:
+  enabled: false # phase 1 uses hourly sfc; turn on for onset timing
+  herbie_model: hrrr
+  product: subh
+  cadence_h: 1
+  leads: [1, 18, 1]
+  search: >-
+    :(?:TMP|DPT):2 m above|:(?:UGRD|VGRD):10 m above|:GUST:surface|:PRATE:surface|:VIS:surface
+
+gfs:
+  enabled: false
+  herbie_model: gfs
+  product: 0p25
+  cadence_h: 6
+  leads: [0, 120, 3]
+  search: >-
+    :HGT:500 mb|:PRMSL:|:(?:UGRD|VGRD|TMP|RH):850 mb
+
+rrfs:
+  enabled: false # operational from Oct 2026; history too short to train on alone
+  herbie_model: rrfs
+  product: subh
+  cadence_h: 1
+  leads: [1, 18, 1]
+  search: >-
+    :(?:TMP|DPT):2 m above|:(?:UGRD|VGRD):10 m above|:GUST:surface|:VIS:surface
+
+rrfs_ens:
+  enabled: false
+  herbie_model: rrfs
+  product: 2dfldnomads
+  domain: na
+  members: [1, 2, 3, 4, 5]
+  cadence_h: 6
+  leads: [0, 60, 1]
+  search: >-
+    :(?:TMP|DPT):2 m above|:(?:UGRD|VGRD):10 m above|:GUST:surface
+
+refs:
+  enabled: false
+  herbie_model: refs
+  product: prob
+  cadence_h: 6
+  leads: [1, 60, 1]
+  search: ":APCP:"

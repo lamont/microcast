@@ -1,0 +1,13 @@
+{
+  "type": "Feature",
+  "properties": {"name": "Divisadero St, Haight to Geary (example)"},
+  "geometry": {
+    "type": "LineString",
+    "coordinates": [
+      [-122.43735, 37.77156],
+      [-122.43799, 37.77525],
+      [-122.43872, 37.77897],
+      [-122.43967, 37.78367]
+    ]
+  }
+}

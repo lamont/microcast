@@ -1,0 +1,27 @@
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+
+# Local data, lake, caches, experiment tracking
+data/
+mlruns/
+mlartifacts/
+*.grib2
+*.idx
+
+# Secrets and private targets
+.env
+config/*.local.yaml
+routes/private/
+
+# Office exports kept locally, not in the repo
+*.docx
+~$*
+
+.DS_Store
+.ipynb_checkpoints/

@@ -1,0 +1,33 @@
+# Places and routes registry: every forecast target, and the join key
+# (point_id) for every table downstream. Adding a target is a config change.
+#
+# This file is the public example. Real coordinates come from the environment
+# (.env, see .env.example). For private routes, copy this file to
+# config/places.local.yaml (git-ignored) and point geometry at routes/private/.
+
+places:
+  - id: home
+    kind: point
+    lat: ${MICROCAST_HOME_LAT}
+    lon: ${MICROCAST_HOME_LON}
+    sensors: [station_home, purpleair_home]
+    variables: [t2m, td2m, wind10, gust, precip, pm25, low_cloud]
+
+routes:
+  - id: school_walk
+    kind: route
+    geometry: routes/examples/divisadero.geojson # Haight to Geary, ~1.4 km
+    sample_every_m: 200
+    mode: walk
+    schedule:
+      - {days: [mon, tue, wed, thu, fri], window: "08:00-08:25"}
+      - {days: [mon, tue, wed, thu, fri], window: "15:15-15:40"}
+    audience: [kids, lamont]
+
+  - id: ocean_beach_ride
+    kind: route
+    geometry: routes/examples/ob_loop.geojson # Great Highway out, Sunset Blvd back
+    sample_every_m: 500
+    mode: bike
+    flexible_departure: {earliest: "09:00", latest: "16:00", duration_min: 90}
+    audience: [lamont]
