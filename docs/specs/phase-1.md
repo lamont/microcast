@@ -68,9 +68,9 @@ rolling monthly folds).
 
 Two loads were running when this was written; both resume where they stop.
 
-- **HRRR hourly fill** (`backfill hrrr --stride 1`): nearly finished. Log
-  `data/logs/backfill-hrrr-stride1.log`; rerun the same command to fill
-  anything interrupted.
+- **HRRR hourly fill** (`backfill hrrr --stride 1`): **finished**, +8,482
+  cycles (≈13,000 of 13,176 hourly cycles 2025-04 → 2026-09; 124 missing
+  from the archive, mostly 23Z; fillable from GRIB).
 - **MADIS** (`backfill madis --start 2025-04-01 --end 2026-10-05T21`): about
   13–14 h total at 3 workers, under `caffeinate`. Log
   `data/logs/backfill-madis.log`.
