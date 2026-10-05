@@ -26,6 +26,7 @@ nwp = [
     "numcodecs>=0.17.0",
     "requests>=2.34.2",
     "scikit-learn>=1.9.1",
+    "scipy>=1.18.1",
 ]
 ml = [
     "lightgbm>=4.7.0",

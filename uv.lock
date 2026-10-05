@@ -1497,6 +1497,7 @@ nwp = [
     { name = "numcodecs" },
     { name = "requests" },
     { name = "scikit-learn" },
+    { name = "scipy" },
 ]
 
 [package.dev-dependencies]
@@ -1522,6 +1523,7 @@ requires-dist = [
     { name = "requests", marker = "extra == 'nwp'", specifier = ">=2.34.2" },
     { name = "scikit-learn", marker = "extra == 'nwp'", specifier = ">=1.9.1" },
     { name = "scipy", marker = "extra == 'ml'", specifier = ">=1.18.1" },
+    { name = "scipy", marker = "extra == 'nwp'", specifier = ">=1.18.1" },
     { name = "shapely", specifier = ">=2.1.2" },
     { name = "typer", specifier = ">=0.27.2" },
     { name = "xarray", specifier = ">=2026.9.0" },

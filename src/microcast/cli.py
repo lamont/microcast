@@ -167,6 +167,21 @@ def ingest_synoptic(days: int = typer.Option(7, help="Days back to pull (free ti
     typer.echo(f"{bid}: {len(df)} rows " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
 
 
+@backfill_app.command("madis")
+def backfill_madis(
+    start: str = typer.Option(..., help="First hour (ISO, UTC)"),
+    end: str = typer.Option(..., help="Stop before this hour (ISO, UTC)"),
+    workers: int = typer.Option(4, help="Parallel hourly downloads (~30 MB each)"),
+) -> None:
+    """MADIS mesonet history (CWOP, PG&E, ...) inside the network box into bronze.obs."""
+    from microcast.ingest.madis import backfill
+    from microcast.lake.catalog import init_lake
+
+    init_lake()
+    stats = backfill(_parse_init(start), _parse_init(end), workers=workers, log=typer.echo)
+    typer.echo(", ".join(f"{k} {v}" for k, v in stats.items()))
+
+
 @backfill_app.command("hrrr")
 def backfill_hrrr(
     start: str = typer.Option(..., help="First cycle (ISO date/time, UTC)"),

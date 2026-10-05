@@ -59,8 +59,35 @@ rolling monthly folds).
 - [x] **Lake portability:** `microcast lake copy --to <catalog>` (D11).
 - [x] **Fair comparison:** leaderboard, monthly skill and the site use only
   forecasts every model made (D11).
-- [ ] **HRRR hourly fill** (`--stride 1`) running; then rebuild silver/gold,
-  rerun the backtest and the site, and update Results below.
+- [x] **MADIS ingest:** `microcast backfill madis` (free history for the CWOP
+  and PG&E stations, D10); station positions in bronze.stations.
+- [x] **PurpleAir:** real sensor index in `.env`; channel B cleaned and
+  agreeing with A again (D5); API key added, points plan in D10.
+
+## Handoff (2026-10-05, end of session)
+
+Two loads were running when this was written; both resume where they stop.
+
+- **HRRR hourly fill** (`backfill hrrr --stride 1`): nearly finished. Log
+  `data/logs/backfill-hrrr-stride1.log`; rerun the same command to fill
+  anything interrupted.
+- **MADIS** (`backfill madis --start 2025-04-01 --end 2026-10-05T21`): about
+  13–14 h total at 3 workers, under `caffeinate`. Log
+  `data/logs/backfill-madis.log`.
+
+Then, in order:
+
+1. `microcast build silver --start 2025-04-01` → `build gold` → `backtest`
+   → `site`; update Results below with the hourly-cycle numbers.
+2. HRRR at the Synoptic/MADIS stations: a points-only pass over 2025-04 →
+   now (D10, "For code"), then add those stations to gold so the
+   Castro/park stations enter the backtest. The MADIS history means they
+   don't have to wait for accrual.
+3. PurpleAir: one cheap discovery call, choose the transect, price one
+   sensor-day before any history pull (D10 plan).
+4. Collectors as k3s CronJobs on the swarm cluster: Synoptic daily (free tier
+   is 7 days deep), PurpleAir LAN every 2 min, HRRR live hourly; status site
+   internal at weather.henry.st (D8).
 
 ## Next
 

@@ -141,6 +141,7 @@ WITH latest AS (
 SELECT source, station_id, obs_time, variable, value,
     CASE
         WHEN value IS NULL OR isnan(value) THEN 'missing'
+        WHEN qc_flag IN ('B', 'X') THEN 'source_rejected'  -- MADIS QC: bad / rejected
         WHEN value < r.lo OR value > r.hi THEN 'range'
         ELSE 'ok'
     END AS qc_flag,

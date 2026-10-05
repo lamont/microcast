@@ -161,14 +161,16 @@ question is still "leave by when, for a tailwind home".
   locates the house. Rows use `station_id = purpleair_home`. Polled on the LAN
   (`MICROCAST_PURPLEAIR_HOST`, free) or backfilled through the API
   (`PURPLEAIR_API_KEY`). Its temperature reads hot and is a trend feature only.
-  The index (in `.env`) comes from the widget embed code and has not been
-  checked against the API yet. **LAN, confirmed 2026-10-05:** the outdoor sensor reports
+  **Corrected 2026-10-05:** the PurpleAir account shows the outdoor PA-II's
+  real index (now in `.env`); the widget embed code pointed at a different
+  sensor, so it was never ours. **LAN, confirmed 2026-10-05:** the outdoor sensor reports
   `place: outside` and two laser counters (PMSX003 A + B). A second, indoor
   PurpleAir is single-channel and is not ingested. Channel B outdoors
   was fouled (3,334 µg/m³ vs 4.6 on A, 47× the 0.3 µm count), so silver
   range-flags PM channels above 1,000 µg/m³ and PM2.5 comes from A alone until
-  B is cleaned. With one good channel there is no A/B agreement check, so PM
-  data from this period is single-sensor quality. Give the sensor a DHCP
+  B is cleaned. **Cleaned 2026-10-05 (air blast):** B now reads 6.5 vs A's
+  7.6 µg/m³ (B/A 0.85; particle counts within ~20% in every size bin), inside
+  PurpleAir's 5 µg/m³ agreement rule. Readings before then are A-only. Give the sensor a DHCP
   reservation so the LAN host stays put. On macOS, Local Network privacy
   blocks uv's and Homebrew's Pythons (ad-hoc signed, no stable identity, so
   there is no prompt and no way to grant it), while Apple's curl is allowed.
@@ -308,6 +310,53 @@ if the daily pull stops working, these stations stop accruing. If a paid
 month with history is ever bought, pull 2025-04 → now for these six stations
 in one go (matching the HRRR backfill); that puts them straight into
 backtests instead of waiting ~4 months (3 training + 1 test).
+
+**Free history: NOAA MADIS** (found 2026-10-05). The MADIS public archive
+carries all six stations: the CWOP five as provider `APRSWXNET`, 604PG via
+`MesoWest/PGE`. Each reports 4–12 times an hour with temperature, dewpoint, RH,
+wind, gust, altimeter/station pressure and solar radiation, with MADIS QC
+flags. It also has five more CWOP stations in the city (D5422, E5830, G0189,
+G3010, G6226) and a second PG&E station (438PG). Two ways in:
+
+- **Public query CGI** (`madisXmlPublicDir`): server-side box/time subset,
+  ~22–40 KB per query, but 35–110 s each and capped at ~2 h of data per query.
+  18 months is ~6,600 queries, ~3 days serially. Fine for gap-filling, too
+  slow (and impolite in parallel) for a backfill.
+- **Hourly national netCDF** (`madisPublic1/data/archive/YYYY/MM/DD/LDAD/
+  mesonet/netCDF/`): ~30 MB per hour, all variables. 18 months ≈ 13k files ≈
+  400 GB transferred to keep a few hundred MB. About 9 h at our measured
+  bandwidth; stream, cut out the box, discard. The right route for the backfill.
+  **Chosen.** Range reads don't help: the files are gzip (not seekable) of
+  record-interleaved netCDF-3, so our ~20 stations' records are scattered
+  through all ~200k. `microcast backfill madis` streams each hour, keeps the
+  network box (37.60–37.90 N, 122.62–122.33 W: ~30 stations incl. Fort Point,
+  the Presidio, Ocean Beach and Marin headlands), and appends to bronze.obs
+  (`source = madis`, MADIS QC flags kept; silver rejects B and X) plus
+  station positions to bronze.stations. 48 hours per snapshot, resumable.
+
+**PurpleAir network.** The BME280 temperature/RH/pressure of public PurpleAir
+sensors is a useful dense network for the marine-layer push (hot-biased, so
+used as changes, not levels; no wind). History exists only through the
+PurpleAir API (key + points); MADIS doesn't carry PurpleAir. Going forward, a
+bounding-box poll every 10–15 min accrues it cheaply. The own sensor's past is
+in the API only, and with ~51% upload success it has gaps.
+
+**PurpleAir points plan** (key added 2026-10-05, 1,000,000 points; spend
+sparingly). The API charges per field per row, so cost is driven by sensors ×
+rows × fields:
+
+1. **Find stations of interest once:** one `/v1/sensors` call over the
+   network box with `location_type=0` (outside) and only `name, latitude,
+   longitude, last_seen` (a few points per sensor), cached in bronze.stations.
+2. **Pick a small set:** the sensors that add something MADIS lacks, i.e. a
+   transect from Ocean Beach through the Sunset and the park to the Castro
+   (the marine-layer path), about 10–20 sensors, not every sensor in SF.
+3. **History, thin:** `/history` with only `temperature, humidity, pressure`,
+   at `average=60` (hourly; it matches HRRR) rather than 10-minute rows.
+   Estimate the cost from a single sensor-day before any loop, and stop at a
+   budget (say 250k points) leaving the rest for live polling.
+4. **Live:** one bounding-box `/v1/sensors` poll every 10–15 min for the same
+   three fields on the chosen set, where each row is one current reading.
 
 **For code.** Stations added after a cycle was backfilled have no HRRR rows
 for it, and a rerun skips the cycle because its batch id is already recorded.

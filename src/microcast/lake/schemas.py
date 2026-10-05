@@ -189,6 +189,22 @@ SCORES_SCHEMA = _wide(
     ("in_p10_p90", IntegerType(), True),
 )
 
+# Where each observing station was, as reported with its data (MADIS); one row per
+# station per batch. Network features (upwind stations) join on this.
+STATIONS_SCHEMA = _wide(
+    ("source", _S, True),
+    ("station_id", _S, True),
+    ("provider", _S, False),
+    ("lat", _D, True),
+    ("lon", _D, True),
+    ("elevation_m", _D, False),
+    ("ingest_batch", _S, True),
+    ("ingested_at", _T, True),
+)
+BRONZE_STATIONS = TableDef(
+    "bronze", "stations", STATIONS_SCHEMA, _spec(STATIONS_SCHEMA, ("source", "identity"), ("ingested_at", "day"))
+)
+
 SILVER_OBS_QC = TableDef(
     "silver", "obs_qc", OBS_QC_SCHEMA, _spec(OBS_QC_SCHEMA, ("source", "identity"), ("obs_time", "day"))
 )
@@ -209,6 +225,7 @@ GOLD_SCORES = TableDef(
 TABLES: list[TableDef] = [
     BRONZE_NWP_POINT,
     BRONZE_OBS,
+    BRONZE_STATIONS,
     SILVER_OBS_QC,
     SILVER_NWP_ALIGNED,
     GOLD_TRAINING,
