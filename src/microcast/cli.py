@@ -100,7 +100,10 @@ def ingest_obs(
     from microcast.lake.catalog import init_lake
 
     init_lake()
-    stations = [s for s in registry_mod.load().stations if not station or s.id in station]
+    archive_sources = {"iem_asos", "iem_hads", "ndbc"}  # Synoptic has its own command
+    stations = [
+        s for s in registry_mod.load().stations if s.source in archive_sources and (not station or s.id in station)
+    ]
     last = date.fromisoformat(end) if end else date.today() + timedelta(days=1)
     stats = backfill(stations, date.fromisoformat(start), last, log=typer.echo)
     typer.echo(", ".join(f"{k} {v}" for k, v in stats.items()))
@@ -130,6 +133,22 @@ def ingest_purpleair(
         bid = f"purpleair/local/{now:%Y-%m-%dT%H:%M}"
         append_bronze("bronze.obs", to_arrow(df, bid), batches=[bid])
         typer.echo(f"{bid}: {len(df)} rows")
+
+
+@ingest_app.command("synoptic")
+def ingest_synoptic(days: int = typer.Option(7, help="Days back to pull (free tier: at most 7)")) -> None:
+    """Synoptic stations from the registry: the last N days into bronze.obs. Run daily."""
+    from microcast.ingest import synoptic
+    from microcast.ingest.obs import to_arrow
+    from microcast.lake.catalog import append_bronze, init_lake
+
+    init_lake()
+    ids = [s.id for s in registry_mod.load().stations if s.source == "synoptic"]
+    df = synoptic.fetch(ids, days)
+    bid = f"synoptic/{datetime.now(UTC):%Y-%m-%dT%H:%M}"
+    append_bronze("bronze.obs", to_arrow(df, bid), batches=[bid])
+    counts = df.groupby("station_id").size().to_dict()
+    typer.echo(f"{bid}: {len(df)} rows " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
 
 
 @backfill_app.command("hrrr")

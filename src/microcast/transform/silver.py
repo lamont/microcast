@@ -39,6 +39,7 @@ RANGES = {
     "pm25_a": (0, 1000),
     "pm25_b": (0, 1000),
     "rh_sensor": (0, 100),
+    "solar": (0, 1400),  # W/m2; clear-sky noon at SF peaks near 1000
 }
 
 _BRONZE_NWP_COLS = (

@@ -42,6 +42,13 @@ stations:
   - {id: KSFO, source: iem_asos, lat: 37.6190, lon: -122.3749, note: "SFO ASOS; temp, dewpoint, wind, gust"}
   - {id: KOAK, source: iem_asos, lat: 37.7178, lon: -122.2330, note: "Oakland ASOS; temp, dewpoint, wind, gust"}
   - {id: FTPC1, source: ndbc, lat: 37.8060, lon: -122.4660, note: "Fort Point, Golden Gate; temp, wind, gust, upwind of the park"}
+  # Synoptic (free tier: last 7 days only, so these accrue from 2026-10 on; D10).
+  - {id: 604PG, source: synoptic, lat: 37.7710, lon: -122.5080, note: "PG&E Golden Gate Park, west end of JFK Drive; temp, wind, gust"}
+  - {id: C5988, source: synoptic, lat: 37.7600, lon: -122.4320, note: "CWOP, Castro; temp, wind, gust, solar (since 2006)"}
+  - {id: F6803, source: synoptic, lat: 37.7590, lon: -122.4370, note: "CWOP, Castro; temp, wind, gust, solar"}
+  - {id: E9227, source: synoptic, lat: 37.7560, lon: -122.4360, note: "CWOP, Castro; temp, wind, gust, solar"}
+  - {id: F2543, source: synoptic, lat: 37.7630, lon: -122.4460, note: "CWOP, Corona Heights slope (~150 m); temp, wind, gust, solar"}
+  - {id: F4637, source: synoptic, lat: 37.7700, lon: -122.4230, note: "CWOP, Duboce Triangle; temp, wind, gust"}
 
 # Sensors we own. Identifiers that would locate the house live in .env.
 sensors:

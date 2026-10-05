@@ -175,6 +175,10 @@ question is still "leave by when, for a tailwind home".
   `fetch_local` falls back to `/usr/bin/curl` on that error; a poller on the
   NAS or cluster takes the normal path. It also refuses a sensor that doesn't
   report `place: outside`.
+  **Hardware:** a PurpleAir PA-II (hardware 2.0, firmware 7.02: ESP8266,
+  BME280, two PMS5003 counters). It reported only 51% of its uploads to
+  PurpleAir succeeding (3,484 of 6,853, WiFi −64 dBm), so API history has
+  gaps and the LAN poll is the primary path, not a convenience.
 - **Backyard station (planned).** A wifi station away from the house, which
   gives better temperature than anything near a wall, plus wind, plus solar
   radiation for the clear-sky index in D2. Requirements: solar radiation (W/m²
@@ -251,6 +255,11 @@ static host works. Once live inference exists (phase 4) the same pages gain
 the next-12-hour forecast panel the design described, read from
 `serving.latest`.
 
+**Hosting:** k3s on the home "swarm" cluster (the design's stage 3, early
+for this one service): the built files in an nginx container behind the
+cluster's Traefik ingress for `weather.henry.st`, rebuilt by a job after each
+backtest (later, each live scoring run).
+
 **Changes the design.** The design kept everything behind Tailscale. The
 status site is meant to be reachable at a public name, so it carries a
 privacy rule: it shows station ids, place ids and aggregate scores only,
@@ -265,6 +274,34 @@ Alerts are delivered to individuals or a family channel on Slack, in place of
 the Home Assistant `notify` service and ntfy fallback (edited in
 `design.md`, Delivery). The phase 4 alert engine targets Slack first.
 
+## D10 · Synoptic stations accrue; they can't be backfilled
+
+*2026-10-05*
+
+**Decision.** Six Synoptic stations join the registry (`source: synoptic`):
+**604PG** (PG&E, Golden Gate Park at the west end of JFK Drive) for the ride,
+and five CWOP stations around the Castro and Corona Heights (**C5988, F6803,
+E9227, F2543, F4637**), four of them with solar radiation, which is the D2
+low-cloud truth we lacked before the backyard station. `microcast ingest
+synoptic` pulls the last 7 days; schedule it daily (a CronJob on the swarm
+cluster once that exists, D8).
+
+**Constraint.** The free tier serves only the last ~7 days (older requests are
+refused in the response body), so there is no history to train on: these
+stations accrue from 2026-09-28 on. A paid tier would unlock the archive
+(C5988 goes back to 2006), which would let them into backtests immediately.
+
+**Caveats.** CWOP stations are backyard installs: temperature is usually fine,
+wind is often sheltered by buildings and trees. Treat Castro wind as local
+exposure, not open-terrain truth; 604PG and Fort Point are the wind truth for
+the ride. Auth: Synoptic issues an API key, and requests need a token
+generated from it (`/v2/auth`); `.env` holds both.
+
+**For code.** Stations added after a cycle was backfilled have no HRRR rows
+for it, and a rerun skips the cycle because its batch id is already recorded.
+Before these stations enter a backtest, backfill HRRR for just the new points
+over the weeks they have obs (a points-only pass with its own batch ids).
+
 ## Open
 
 - RRFS/REFS operational date (Oct 6 vs Oct 14, 2026) is still unverified. Herbie
@@ -275,6 +312,7 @@ the Home Assistant `notify` service and ntfy fallback (edited in
   Ecowitt report W/m² and push locally. Confirm before building the ingest.
 - Confirm the PurpleAir index in `.env` is the outdoor sensor (one API call
   with a read key; the LAN `/json` doesn't report the index). Clean channel B.
-- Hosting for weather.henry.st (NAS behind a tunnel, or a static bucket/CDN).
+- How weather.henry.st reaches the internet from the swarm cluster (port
+  forward, or a tunnel), and where the lake lives there.
 - REFS products available through Herbie: `mean, sprd, pmmn, lpmm, avrg, prob,
   eas, ffri`. Check whether `prob` covers the rain and wind exceedances we need.
