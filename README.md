@@ -33,8 +33,9 @@ built yet. As of 2026-10-05:
   a LightGBM residual model.
 - Backtests on rolling monthly folds with CRPS skill and bootstrap CIs, logged
   to MLflow (SQLite file). **The phase 1 gate is passed:** the GBM residual
-  beats raw HRRR at 0–6 h by about 20–40% for temperature and gust
-  ([results](docs/specs/phase-1.md#results-gate-passed-2026-10-05)).
+  beats raw HRRR at 0–6 h by about 31–42% for temperature and 21–25% for
+  gust on hourly cycles
+  ([results](docs/specs/phase-1.md#results-on-hourly-cycles-2026-10-05-evening)).
 - A static status site (Status and Analytics pages) built from the lake; it
   runs locally, not hosted yet.
 
@@ -48,9 +49,9 @@ built yet. As of 2026-10-05:
 | IEM HADS | Hourly temperature | SFOC1 (the Mint, downtown SF; the house's stand-in) | `microcast ingest obs` | Loaded 2025-04 → now |
 | NDBC | Temperature, wind, gust | FTPC1 (Fort Point, Golden Gate) | `microcast ingest obs` | Loaded 2025-04 → now |
 | Synoptic | Temperature, wind, gust, solar radiation | 604PG (PG&E, Golden Gate Park) and five CWOP home stations in the Castro | `microcast ingest synoptic` | Works; free tier keeps 7 days, so it accrues from 2026-09-28 |
-| MADIS mesonet archive | History for the same Synoptic stations plus ~25 more in the SF box (CWOP, PG&E, Presidio, Marin headlands) | 2025-04 → now | `microcast backfill madis` | Loading (finishes 2026-10-05 night) |
+| MADIS mesonet archive | History for the same Synoptic stations plus ~25 more in the SF box (CWOP, PG&E, Presidio, Marin headlands) | 2025-04 → now | `microcast backfill madis` | Loaded (18.8M rows) |
 | PurpleAir, own sensor | PM2.5 on both laser channels, sensor temperature, humidity, pressure | The outdoor PA-II at the house | `microcast ingest purpleair` (home network, free) | Works; run by hand |
-| PurpleAir, public transect | Hourly sensor temperature | 10 public sensors, Ocean Beach → Sunset → Twin Peaks → Castro, 2025-04 → now | `microcast backfill purpleair` (paid API points) | Pulled to local files; loads into the lake after MADIS |
+| PurpleAir, public transect | Hourly sensor temperature | 10 public sensors, Ocean Beach → Sunset → Twin Peaks → Castro, 2025-04 → now | `microcast backfill purpleair` (paid API points) | Loaded (~115k rows; ~237k API points) |
 
 Only the four original truth stations (SFOC1, KSFO, KOAK, FTPC1) feed the
 backtest today. The Synoptic, MADIS and PurpleAir stations
