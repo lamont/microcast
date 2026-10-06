@@ -149,11 +149,9 @@ git-ignored. The status site shows station and place ids and scores only.
 
 | Term | Meaning |
 | --- | --- |
-| API | Application Programming Interface |
 | ASOS | Automated Surface Observing System: the airport weather stations (KSFO, KOAK) |
 | AWS | Amazon Web Services: where NOAA publishes HRRR through its Open Data program |
 | CI | Confidence interval (here, from a bootstrap: resampling the scores many times) |
-| CLI | Command-line interface (`microcast …`) |
 | CRPS | Continuous Ranked Probability Score: error of a probabilistic forecast, in the variable's units; lower is better |
 | CWOP | Citizen Weather Observer Program: volunteer home weather stations |
 | DSWRF | Downward Short-Wave Radiation Flux: sunlight reaching the ground, in W/m² |
@@ -164,7 +162,6 @@ git-ignored. The status site shows station and place ids and scores only.
 | HRRR | High-Resolution Rapid Refresh: NOAA's 3 km, hourly-updated US weather model |
 | IEM | Iowa Environmental Mesonet: Iowa State's archive of ASOS and HADS observations |
 | k3s | A lightweight Kubernetes distribution (the "k8s" numeronym, smaller) |
-| LAN | Local Area Network: the home network |
 | LCC | Low Cloud Cover: HRRR's low-cloud-layer fraction |
 | MADIS | Meteorological Assimilation Data Ingest System: NOAA's archive of mesonet observations |
 | Mesonet | A mesoscale network: dense non-federal weather stations |
@@ -182,7 +179,6 @@ git-ignored. The status site shows station and place ids and scores only.
 | S3 | Amazon Simple Storage Service, and the object-storage API MinIO also speaks |
 | SF | San Francisco |
 | SFO | San Francisco International Airport |
-| SQL | Structured Query Language |
 | WMO | World Meteorological Organization |
 
 ### Tools and terms
