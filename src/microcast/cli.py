@@ -212,7 +212,8 @@ def backfill_purpleair(
 
     init_lake()
     done = recorded_batches("bronze.obs")
-    todo = [(bid, df) for bid, df in purpleair.load_cached(cache) if bid not in done]
+    # Only sensors still in the registry; a dropped sensor's cached responses stay on disk.
+    todo = [(bid, df) for bid, df in purpleair.load_cached(cache) if bid not in done and bid.split("/")[2] in network]
     if not todo:
         typer.echo("nothing new to load")
         return

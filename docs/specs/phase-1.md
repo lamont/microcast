@@ -84,13 +84,15 @@ Then, in order:
    Castro/park stations enter the backtest. The MADIS history means they
    don't have to wait for accrual.
 3. PurpleAir: discovery done, budget agreed (250k points). Nine transect
-   sensors (Ocean Beach → Castro, `kind: purpleair_network` in
+   sensors, now ten (Ocean Beach → Castro, `kind: purpleair_network` in
    `config/places.yaml`) are pulled as hourly temperature, 2025-04 → now, by
    `microcast backfill purpleair` into `data/purpleair/history/` (stops at
-   750k points left). **Pulled 2026-10-05:** 91,544 rows for 182k points
-   (817,617 left). Seven sensors cover most of 2025-04 → now; pa_110410 has
-   only 2026-09-15 on, pa_295103 starts 2025-12-23, and pa_284234 starts
-   2025-07-22 with about half its hours missing. Once MADIS is done: `microcast backfill purpleair --load`
+   750k points left). **Pulled 2026-10-05:** 117,709 rows (ten sensors) for about 237k points
+   (763,003 left, about $24 at $10 per 100k). pa_110410 (Noriega, history only
+   from 2026-09-15) was swapped for pa_105692, and pa_117947 (States St) added
+   because pa_284234 starts 2025-07-22 with about half its hours missing;
+   pa_295103 starts 2025-12-23. The dropped sensor's responses stay in the
+   cache and aren't loaded. Once MADIS is done: `microcast backfill purpleair --load`
    appends them to bronze.obs and bronze.stations. Live polling will be hourly,
    not every 10 min; judge whether the data helps before spending more.
 4. Scheduled collectors as Dagster jobs on the swarm k3s cluster (D12), not
