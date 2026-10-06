@@ -182,6 +182,67 @@ def backfill_madis(
     typer.echo(", ".join(f"{k} {v}" for k, v in stats.items()))
 
 
+@backfill_app.command("purpleair")
+def backfill_purpleair(
+    start: str = typer.Option("2025-04-01", help="First hour (ISO, UTC)"),
+    end: str = typer.Option("latest-0", help="Stop before this hour (ISO, UTC)"),
+    floor: int = typer.Option(750_000, help="Stop once the key has this many points left"),
+    load: bool = typer.Option(False, help="Append the cached responses to bronze (no API calls)"),
+) -> None:
+    """Public PurpleAir sensors on the transect: hourly temperature, cached under data/purpleair/history/."""
+    from microcast import settings
+    from microcast.ingest import purpleair
+
+    cache = settings.data_dir() / "purpleair" / "history"
+    network = {k: v for k, v in registry_mod.load().sensors.items() if v.get("kind") == "purpleair_network"}
+    if not load:
+        sensors = {k: int(v["sensor_index"]) for k, v in network.items()}
+        stats = purpleair.backfill_network(
+            sensors, _parse_init(start), _parse_init(end), cache, floor=floor, log=typer.echo
+        )
+        typer.echo(", ".join(f"{k} {v}" for k, v in stats.items()))
+        return
+
+    import pandas as pd
+    import pyarrow as pa
+
+    from microcast.ingest.obs import to_arrow
+    from microcast.lake.catalog import append_bronze, init_lake, recorded_batches
+    from microcast.lake.schemas import STATIONS_SCHEMA
+
+    init_lake()
+    done = recorded_batches("bronze.obs")
+    todo = [(bid, df) for bid, df in purpleair.load_cached(cache) if bid not in done]
+    if not todo:
+        typer.echo("nothing new to load")
+        return
+    obs = pa.concat_tables([to_arrow(df, bid) for bid, df in todo])
+    append_bronze("bronze.obs", obs, batches=[bid for bid, _ in todo])
+    now = pd.Timestamp(datetime.now(UTC))
+    bid = f"purpleair/stations/{now:%Y-%m-%dT%H:%M}"
+    stations = pd.DataFrame(
+        [
+            {
+                "source": purpleair.SOURCE,
+                "station_id": k,
+                "provider": "PurpleAir",
+                "lat": float(v["lat"]),
+                "lon": float(v["lon"]),
+                "elevation_m": None,
+                "ingest_batch": bid,
+                "ingested_at": now,
+            }
+            for k, v in network.items()
+        ]
+    )
+    append_bronze(
+        "bronze.stations",
+        pa.Table.from_pandas(stations, schema=STATIONS_SCHEMA.as_arrow(), preserve_index=False),
+        batches=[bid],
+    )
+    typer.echo(f"loaded {len(todo)} responses, {obs.num_rows} rows, {len(stations)} station positions")
+
+
 @backfill_app.command("hrrr")
 def backfill_hrrr(
     start: str = typer.Option(..., help="First cycle (ISO date/time, UTC)"),

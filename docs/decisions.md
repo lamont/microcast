@@ -290,8 +290,8 @@ the Home Assistant `notify` service and ntfy fallback (edited in
 and five CWOP stations around the Castro and Corona Heights (**C5988, F6803,
 E9227, F2543, F4637**), four of them with solar radiation, which is the D2
 low-cloud truth we lacked before the backyard station. `microcast ingest
-synoptic` pulls the last 7 days; schedule it daily (a CronJob on the swarm
-cluster once that exists, D8).
+synoptic` pulls the last 7 days; schedule it daily (a Dagster schedule on the
+swarm cluster once that exists, D12).
 
 **Constraint.** The free tier serves only the last ~7 days (older requests are
 refused in the response body), so there is no history to train on: these
@@ -358,6 +358,18 @@ rows × fields:
 4. **Live:** one bounding-box `/v1/sensors` poll every 10–15 min for the same
    three fields on the chosen set, where each row is one current reading.
 
+**Measured (2026-10-05).** Discovery over the network box returned 338 active
+outdoor sensors (100 in the Ocean Beach → Castro corridor) for 1,357 points,
+about 1 point per field per sensor. History costs about **2 points per field
+per hourly row**: one sensor-day of `temperature, humidity, pressure` cost 146
+points, and two days of `temperature` alone cost 98. So 18 months (13,270
+hours) costs about 27k points per sensor for temperature only and 81k for all
+three fields. Sixteen sensors with all three would be 1.3M points, more than
+the key holds. Live polling costs more than it looks: 16 sensors × 3 fields
+every 10 minutes is about 7–9k points a day (the whole key in roughly four
+months), and hourly is about 1.2–1.5k a day. Responses are saved under
+`data/purpleair/` (not in git).
+
 **For code.** Stations added after a cycle was backfilled have no HRRR rows
 for it, and a rerun skips the cycle because its batch id is already recorded.
 Before these stations enter a backtest, backfill HRRR for just the new points
@@ -394,6 +406,41 @@ judged on the subset it can forecast, and its rivals on that same subset.
 Live scoring (phase 4) follows the same rule over whatever window all compared
 models were running, which daily collectors keep growing.
 
+## D12 · Dagster on k3s runs the collectors, not CronJobs
+
+*2026-10-05*
+
+**Decision.** The scheduled work (Synoptic daily, PurpleAir LAN every 2 min,
+HRRR live hourly, MADIS, the silver → gold → backtest → site rebuild) runs as
+Dagster OSS jobs on the swarm k3s cluster, triggered by schedules, sensors or
+the completion of upstream assets. Plain k3s CronJobs are skipped. Part of the
+point is small-scale operating experience with Dagster, especially its
+partitioned backfills, so the design's stage 2 (Docker Compose) is skipped
+too: laptop (`dagster dev`) → k3s.
+
+**Shape.**
+
+- **Assets, partitioned by time.** One asset per lake table. HRRR and MADIS
+  are hourly-partitioned assets, so a live run and a backfill are the same
+  code over different partition ranges (the design's original plan). Today's
+  `microcast backfill …` commands become the asset bodies; the CLI stays as a
+  way to run them without the orchestrator.
+- **Declared in YAML where Dagster allows it.** Dagster Components let a
+  `defs.yaml` per job declare which Python function to run, its schedule and
+  its partitions. These sit in the repo as the manifests to deploy; the
+  official `dagster/dagster` Helm chart's values file is the cluster side.
+- **One writer per table.** Concurrency limits (a pool per Iceberg table) keep
+  two runs from committing to the same table at once, the problem we're
+  currently avoiding by hand (MADIS and the silver rebuild both touch the
+  catalog).
+
+**Consequences.** The laptop's SQLite Iceberg catalog can't be shared by pods,
+so the cluster needs Postgres first: for Dagster's run storage, and as the
+Iceberg catalog (PyIceberg's SQL catalog on Postgres is the smallest step;
+Lakekeeper later, D1). Data moves with `lake copy` (D11). Until the cluster
+is ready, Synoptic's 7-day window means its pull has to run from the laptop
+at least weekly.
+
 ## Open
 
 - RRFS/REFS operational date (Oct 6 vs Oct 14, 2026) is still unverified. Herbie
@@ -402,8 +449,6 @@ models were running, which daily collectors keep growing.
   station; if that's an AcuRite (e.g. Atlas), it reports light in lux and UV,
   not W/m², and local capture needs rtl_433 or the Access hub. Tempest and
   Ecowitt report W/m² and push locally. Confirm before building the ingest.
-- Confirm the PurpleAir index in `.env` is the outdoor sensor (one API call
-  with a read key; the LAN `/json` doesn't report the index). Clean channel B.
 - External endpoint for weather.henry.st (later, via Traefik).
 - REFS products available through Herbie: `mean, sprd, pmmn, lpmm, avrg, prob,
   eas, ffri`. Check whether `prob` covers the rain and wind exceedances we need.

@@ -50,7 +50,8 @@ stations:
   - {id: F2543, source: synoptic, lat: 37.7630, lon: -122.4460, note: "CWOP, Corona Heights slope (~150 m); temp, wind, gust, solar"}
   - {id: F4637, source: synoptic, lat: 37.7700, lon: -122.4230, note: "CWOP, Duboce Triangle; temp, wind, gust"}
 
-# Sensors we own. Identifiers that would locate the house live in .env.
+# Sensors: ours, then public PurpleAir sensors on the marine-layer transect.
+# Identifiers that would locate the house live in .env.
 sensors:
   - id: purpleair_home
     kind: purpleair
@@ -59,3 +60,15 @@ sensors:
   - id: station_home
     kind: weather_station
     status: planned # wifi station for the back yard; must report solar radiation (D2) and wind
+  # Public PurpleAir sensors, Ocean Beach → Sunset → Twin Peaks → Castro (D10).
+  # BME280 temperature reads hot inside the housing: use as changes, not levels.
+  # History is hourly temperature only (~27k API points per sensor for 18 months).
+  - {id: pa_92183, kind: purpleair_network, sensor_index: 92183, lat: 37.7484, lon: -122.5022, note: "Ocean Beach"}
+  - {id: pa_38837, kind: purpleair_network, sensor_index: 38837, lat: 37.7622, lon: -122.4995, note: "Outer Sunset, 40th & Irving"}
+  - {id: pa_262467, kind: purpleair_network, sensor_index: 262467, lat: 37.7616, lon: -122.4881, note: "Outer Sunset, 29th & Judah"}
+  - {id: pa_110410, kind: purpleair_network, sensor_index: 110410, lat: 37.7548, lon: -122.4780, note: "Central Sunset, Noriega"}
+  - {id: pa_68645, kind: purpleair_network, sensor_index: 68645, lat: 37.7601, lon: -122.4655, note: "Inner Sunset, Kirkham"}
+  - {id: pa_113394, kind: purpleair_network, sensor_index: 113394, lat: 37.7516, lon: -122.4690, note: "Golden Gate Heights (elevation)"}
+  - {id: pa_27231, kind: purpleair_network, sensor_index: 27231, lat: 37.7609, lon: -122.4522, note: "Cole Valley"}
+  - {id: pa_295103, kind: purpleair_network, sensor_index: 295103, lat: 37.7535, lon: -122.4518, note: "Midtown Terrace, Twin Peaks west slope"}
+  - {id: pa_284234, kind: purpleair_network, sensor_index: 284234, lat: 37.7556, lon: -122.4372, note: "Castro, Diamond & 21st (east of Twin Peaks)"}

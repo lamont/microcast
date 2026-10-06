@@ -83,17 +83,28 @@ Then, in order:
    now (D10, "For code"), then add those stations to gold so the
    Castro/park stations enter the backtest. The MADIS history means they
    don't have to wait for accrual.
-3. PurpleAir: one cheap discovery call, choose the transect, price one
-   sensor-day before any history pull (D10 plan).
-4. Collectors as k3s CronJobs on the swarm cluster: Synoptic daily (free tier
-   is 7 days deep), PurpleAir LAN every 2 min, HRRR live hourly; status site
-   internal at weather.henry.st (D8).
+3. PurpleAir: discovery done, budget agreed (250k points). Nine transect
+   sensors (Ocean Beach → Castro, `kind: purpleair_network` in
+   `config/places.yaml`) are pulled as hourly temperature, 2025-04 → now, by
+   `microcast backfill purpleair` into `data/purpleair/history/` (stops at
+   750k points left). **Pulled 2026-10-05:** 91,544 rows for 182k points
+   (817,617 left). Seven sensors cover most of 2025-04 → now; pa_110410 has
+   only 2026-09-15 on, pa_295103 starts 2025-12-23, and pa_284234 starts
+   2025-07-22 with about half its hours missing. Once MADIS is done: `microcast backfill purpleair --load`
+   appends them to bronze.obs and bronze.stations. Live polling will be hourly,
+   not every 10 min; judge whether the data helps before spending more.
+4. Scheduled collectors as Dagster jobs on the swarm k3s cluster (D12), not
+   CronJobs: Synoptic daily (the free tier keeps only 7 days, so pull from the
+   laptop at least weekly until then), PurpleAir LAN every 2 min, HRRR live
+   hourly; status site internal at weather.henry.st (D8).
 
 ## Next
 
 1. Finish the hourly HRRR fill, rebuild, rerun, refresh the site.
-2. Collectors on a schedule: Synoptic daily, PurpleAir LAN every 2 min,
-   HRRR live ingest hourly (the first k3s CronJobs on the swarm cluster).
+2. Dagster on the laptop (`dagster dev`): wrap the ingest, backfill and
+   build commands as partitioned assets with schedules and per-table
+   concurrency pools, declared in `defs.yaml` where possible (D12). Then
+   Postgres and the `dagster/dagster` Helm chart on the swarm cluster.
 3. HRRR at the Synoptic stations: a points-only pass for the weeks they have
    obs (D10), then they enter backtests once ~4 months have accrued.
 4. Backyard station (D5); confirm the model first.
@@ -102,7 +113,8 @@ Then, in order:
 
 ## Not in phase 1
 
-Dagster, Docker Compose, MinIO/Lakekeeper, RRFS/REFS ingest, alerts.
+Docker Compose (skipped, D12), MinIO/Lakekeeper, RRFS/REFS ingest, alerts.
+Dagster moves into phase 1 as the scheduler (D12).
 
 ## Results: gate passed (2026-10-05)
 
