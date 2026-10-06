@@ -11,6 +11,9 @@ the design's zoo:
   lead (an as-of feature in gold).
 * ``gbm_residual``: LightGBM on the residual (obs - HRRR) from every gold
   feature, with sigma from held-out residual RMS per lead.
+* ``gbm_purpleair``: the same model and settings plus the PurpleAir transect
+  features (``pa_*`` columns from gold.network_features). The pair is an
+  ablation: any difference in skill is what the transect adds.
 """
 
 from __future__ import annotations
@@ -100,11 +103,15 @@ class GBMResidual:
     def __init__(self, target: str, valid_frac: float = 0.15, max_rounds: int = 2000):
         self.target, self.valid_frac, self.max_rounds = target, valid_frac, max_rounds
         self.points: list[str] = []
+        self.cols: list[str] = []
         self.booster = None
         self.sigma_by_lead = pd.Series(dtype="float64")
 
+    def columns(self, df: pd.DataFrame) -> list[str]:
+        return feature_columns()
+
     def _X(self, df: pd.DataFrame) -> pd.DataFrame:
-        X = df.reindex(columns=feature_columns()).copy()
+        X = df.reindex(columns=self.cols).copy()
         X["point"] = pd.Categorical(df.point_id, categories=self.points)
         return X
 
@@ -113,6 +120,7 @@ class GBMResidual:
 
         train = train.sort_values("valid_time")
         self.points = sorted(train.point_id.unique())
+        self.cols = self.columns(train)
         y = train[f"obs_{self.target}"] - train[f"nwp_{self.target}"]
         cut = int(len(train) * (1 - self.valid_frac))  # time-ordered holdout, never shuffled
         dtrain = lgb.Dataset(self._X(train.iloc[:cut]), y.iloc[:cut])
@@ -134,7 +142,22 @@ class GBMResidual:
         return pd.DataFrame({"mu": mu, "sigma": _sigma_for(X.lead_min, self.sigma_by_lead)}, index=X.index)
 
 
-MODELS = {"raw_hrrr": RawNWP, "bias_rolling": BiasRolling, "gbm_residual": GBMResidual}
+class GBMPurpleAir(GBMResidual):
+    name = "gbm_purpleair"
+
+    def columns(self, df: pd.DataFrame) -> list[str]:
+        pa_cols = sorted(c for c in df.columns if c.startswith("pa_"))
+        if not pa_cols:
+            raise ValueError("gbm_purpleair needs the pa_* network features joined onto gold")
+        return [*feature_columns()[:-1], *pa_cols, "point"]
+
+
+MODELS = {
+    "raw_hrrr": RawNWP,
+    "bias_rolling": BiasRolling,
+    "gbm_residual": GBMResidual,
+    "gbm_purpleair": GBMPurpleAir,
+}
 
 
 def make(name: str, target: str) -> Forecaster:

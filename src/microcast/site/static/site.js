@@ -12,6 +12,7 @@ const KNOWN = {
   raw_hrrr: { label: "Raw HRRR" },
   gbm_residual: { label: "GBM residual", slot: 1 },
   bias_rolling: { label: "Rolling bias", slot: 2 },
+  gbm_purpleair: { label: "GBM + PurpleAir", slot: 3 },
 };
 const MODELS = {};
 let ORDER = []; // every model in the data: raw_hrrr first, then by color slot

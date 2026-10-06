@@ -81,8 +81,25 @@ def test_models_are_compared_on_common_rows_only():
 
 def test_leaderboard_pools_named_station_groups():
     a, b = _gold(), _gold(seed=1).assign(point_id="C5988")
-    scored = backtest.run(pd.concat([a, b], ignore_index=True), ["raw_hrrr", "bias_rolling"], ["t2m"], log=lambda _: None)
+    scored = backtest.run(
+        pd.concat([a, b], ignore_index=True), ["raw_hrrr", "bias_rolling"], ["t2m"], log=lambda _: None
+    )
     board = backtest.leaderboard(scored, n_boot=50, groups={"original": ["KSFO"], "empty": ["NOPE"]})
     n = board[board.model == "bias_rolling"].groupby("point").n.sum()
     assert n["original"] == n["KSFO"] and n["all"] == n["KSFO"] + n["C5988"]
     assert "empty" not in n  # a group with no scored stations gets no row
+
+
+def test_gbm_purpleair_uses_the_network_features():
+    from microcast import models
+
+    g = _gold(days=120)
+    rng = np.random.default_rng(3)
+    # A network signal that explains part of HRRR's error the base features can't see.
+    g["pa_west_east_anom"] = rng.normal(0, 1, len(g))
+    g["obs_t2m"] = g.obs_t2m + 1.5 * g.pa_west_east_anom
+    scored = backtest.run(g, ["raw_hrrr", "gbm_residual", "gbm_purpleair"], ["t2m"], log=lambda _: None)
+    crps = scored.groupby("model_name").crps.mean()
+    assert crps["gbm_purpleair"] < 0.8 * crps["gbm_residual"]
+    with pytest.raises(ValueError, match="pa_"):
+        models.make("gbm_purpleair", "t2m").fit(_gold(days=30))

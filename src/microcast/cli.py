@@ -324,20 +324,27 @@ def build_gold(
     PurpleAir sensors are never truth: their temperature reads hot inside the
     housing (D10), so they can only be inputs.
     """
-    from microcast.lake.catalog import get_catalog
+    from microcast.lake.catalog import get_catalog, init_lake
     from microcast.transform import gold
 
+    init_lake()  # creates gold.network_features on first run
     ids = {s.id for s in registry_mod.load().stations}
     if stations == "network":
         st = get_catalog().load_table("bronze.stations").scan(selected_fields=("source", "station_id")).to_arrow()
         ids |= {r["station_id"] for r in st.to_pylist() if r["source"] == "madis"}
     typer.echo(f"{len(ids)} truth stations")
     typer.echo(f"gold.training_examples: {gold.rebuild(sorted(ids))} rows")
+    from microcast.transform import network
+
+    transect = {
+        k: float(v["lon"]) for k, v in registry_mod.load().sensors.items() if v.get("kind") == "purpleair_network"
+    }
+    typer.echo(f"gold.network_features: {network.rebuild(transect)} rows from {len(transect)} PurpleAir sensors")
 
 
 @app.command("backtest")
 def backtest_cmd(
-    models: str = typer.Option("raw_hrrr,bias_rolling,gbm_residual", help="Comma-separated model names"),
+    models: str = typer.Option("raw_hrrr,bias_rolling,gbm_residual,gbm_purpleair", help="Comma-separated model names"),
     targets: str = typer.Option("t2m,gust", help="Comma-separated targets"),
 ) -> None:
     """Rolling monthly backtests -> gold.forecasts, gold.scores, MLflow, data/reports/."""

@@ -55,6 +55,15 @@ def run_backtests(
     snapshot_id = table.current_snapshot().snapshot_id
     gold = table.scan(snapshot_id=snapshot_id).to_pandas()
     log(f"gold.training_examples @ {snapshot_id}: {len(gold)} rows")
+    net_snapshot = None
+    if any(n.startswith("gbm_purpleair") for n in model_names):
+        from microcast.transform import network
+
+        net = get_catalog().load_table("gold.network_features")
+        net_snapshot = net.current_snapshot().snapshot_id
+        feats = network.wide(net.scan(snapshot_id=net_snapshot).to_arrow())
+        gold = gold.merge(feats, on="init_time", how="left")  # same values at every point of a cycle
+        log(f"gold.network_features @ {net_snapshot}: {feats.shape[1] - 1} features, {len(feats)} cycles")
     if backtest.BASELINE not in model_names:
         model_names = [backtest.BASELINE, *model_names]
 
@@ -70,6 +79,7 @@ def run_backtests(
                         "model": name,
                         "target": target,
                         "gold_snapshot_id": snapshot_id,
+                        "network_snapshot_id": net_snapshot,
                         "rows": len(gold),
                         "stations": ",".join(sorted(gold.point_id.unique())),
                         "valid_from": str(gold.valid_time.min()),

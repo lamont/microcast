@@ -222,6 +222,15 @@ GOLD_SCORES = TableDef(
     "gold", "scores", SCORES_SCHEMA, _spec(SCORES_SCHEMA, ("model_name", "identity"), ("valid_time", "day"))
 )
 
+# Network features, long: one row per (cycle, feature), the same for every point.
+# Long keeps the schema fixed as sensors come and go; the pipeline pivots it wide.
+NETWORK_FEATURES_SCHEMA = _wide(
+    ("init_time", _T, True),
+    ("feature", _S, True),
+    ("value", _D, False),
+)
+GOLD_NETWORK_FEATURES = TableDef("gold", "network_features", NETWORK_FEATURES_SCHEMA, _spec(NETWORK_FEATURES_SCHEMA))
+
 TABLES: list[TableDef] = [
     BRONZE_NWP_POINT,
     BRONZE_OBS,
@@ -229,6 +238,7 @@ TABLES: list[TableDef] = [
     SILVER_OBS_QC,
     SILVER_NWP_ALIGNED,
     GOLD_TRAINING,
+    GOLD_NETWORK_FEATURES,
     GOLD_FORECASTS,
     GOLD_SCORES,
 ]
