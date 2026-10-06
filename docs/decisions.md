@@ -375,6 +375,17 @@ for it, and a rerun skips the cycle because its batch id is already recorded.
 Before these stations enter a backtest, backfill HRRR for just the new points
 over the weeks they have obs (a points-only pass with its own batch ids).
 
+**Done (2026-10-05): the kept HRRR window.** All of SF sits in the same two
+150×150 archive chunks, so a points-only pass would re-download every cycle
+(~250 GB). Instead each cycle is cut to a fixed window (37.55–37.95 N,
+122.70–122.15 W plus 3 cells: 26×26 cells, every field, leads 0–18) and kept
+as `data/hrrr/window/YYYY/MM/DD/<cycle>.npz`, about 200 KB a cycle and
+~2.5–3 GB for 18 months. Any point inside the window is then a local read.
+Values match the earlier per-point reads exactly. `microcast backfill hrrr
+--points network --tag net1` covers every station in bronze.stations that the
+registry pass doesn't (42: MADIS incl. the Synoptic ids, and the PurpleAir
+transect); stations added later need a new tag, and that pass downloads nothing.
+
 ## D11 · Moving the lake, stations coming and going, fair comparison
 
 *2026-10-05*

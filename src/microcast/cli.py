@@ -244,6 +244,26 @@ def backfill_purpleair(
     typer.echo(f"loaded {len(todo)} responses, {obs.num_rows} rows, {len(stations)} station positions")
 
 
+def _network_points(registry: registry_mod.Registry) -> list[registry_mod.VirtualPoint]:
+    """Every station in bronze.stations (MADIS, PurpleAir) the registry HRRR pass doesn't cover.
+
+    The Synoptic stations count as uncovered: they joined the registry after
+    the hourly fill started, so they have no HRRR rows (D10, "For code").
+    """
+    from microcast.lake.catalog import get_catalog
+
+    covered = {vp.point_id for vp in registry.virtual_points()} - {
+        s.id for s in registry.stations if s.source == "synoptic"
+    }
+    df = get_catalog().load_table("bronze.stations").scan().to_pandas()
+    latest = df.sort_values("ingested_at").groupby("station_id").last()
+    return [
+        registry_mod.VirtualPoint(sid, sid, 0, float(r.lat), float(r.lon), None)
+        for sid, r in latest.iterrows()
+        if sid not in covered
+    ]
+
+
 @backfill_app.command("hrrr")
 def backfill_hrrr(
     start: str = typer.Option(..., help="First cycle (ISO date/time, UTC)"),
@@ -252,20 +272,28 @@ def backfill_hrrr(
     stride: int = typer.Option(1, help="Keep one cycle in N (rotating hour, see hrrr_zarr.cycles)"),
     workers: int = typer.Option(16, help="Parallel cycle fetches"),
     commit_every: int = typer.Option(48, help="Cycles per bronze append (one snapshot each)"),
+    points: str = typer.Option("registry", help="'registry', or 'network': stations in bronze.stations"),
+    tag: str = typer.Option("net1", help="Batch tag for a network pass; use a new one when stations are added"),
 ) -> None:
-    """HRRR history from the hrrrzarr archive into bronze.nwp_point."""
+    """HRRR history from the hrrrzarr archive into bronze.nwp_point (kept window under data/hrrr/window/)."""
     from microcast.ingest.hrrr_zarr import backfill
     from microcast.lake.catalog import init_lake
 
     init_lake()
+    registry = registry_mod.load()
+    network = _network_points(registry) if points == "network" else None
+    if network is not None:
+        typer.echo(f"{len(network)} network points: {' '.join(vp.point_id for vp in network)}")
     stats = backfill(
-        registry_mod.load(),
+        registry,
         _parse_init(start),
         _parse_init(end),
         _parse_leads(leads),
         stride_h=stride,
         workers=workers,
         commit_every=commit_every,
+        points=network,
+        tag=tag if network is not None else None,
         log=typer.echo,
     )
     typer.echo(", ".join(f"{k} {v}" for k, v in stats.items()))

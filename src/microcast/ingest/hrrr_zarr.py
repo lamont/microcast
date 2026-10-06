@@ -15,6 +15,11 @@ Layout, per cycle ``YYYYMMDD_HHz``:
 * ``sfc/<day>/<cycle>_anl.zarr/<level>/<VAR>/<level>/<VAR>/<cy>.<cx>``: lead 0
 * ``sfc/<day>/<cycle>_fcst.zarr/<level>/<VAR>/<level>/<VAR>/0.<cy>.<cx>``: leads
   1-18 (1-48 at 00/06/12/18Z), time first.
+
+Each cycle is cut to a fixed Bay Area window (``WINDOW_BOUNDS``: every field,
+leads 0-18) and kept under ``data/hrrr/window/``. Points anywhere inside it are
+then read from disk, so adding stations later costs no downloads. A cycle's
+chunks are ~20 MB on the wire; its window is a few hundred KB.
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import cache
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -32,13 +38,18 @@ import requests
 from numcodecs import Blosc
 from pyproj import Proj
 
+from microcast import settings
 from microcast.lake.schemas import NWP_POINT_SCHEMA
-from microcast.registry import Registry
+from microcast.registry import Registry, VirtualPoint
 
 BASE_URL = "https://hrrrzarr.s3.amazonaws.com"
 CHUNK = 150
 K_NEIGHBOURS = 4
 FILL = -9999.0
+# Kept window (lat_min, lat_max, lon_min, lon_max): the MADIS network box plus SFO, Oakland and Marin.
+WINDOW_BOUNDS = (37.55, 37.95, -122.70, -122.15)
+WINDOW_MARGIN = 3  # cells beyond the bounds, so every point's 4 nearest cells are inside
+CACHE_LEADS = 18  # every cycle has f01-f18; the 48-hour cycles' later leads aren't kept
 
 # (zarr level, zarr variable) -> (cfgrib short name, level label used by ingest.nwp)
 VARIABLES: dict[tuple[str, str], tuple[str, str]] = {
@@ -108,10 +119,15 @@ class Neighbour:
 
 def neighbours(registry: Registry, k: int = K_NEIGHBOURS) -> list[Neighbour]:
     """The k nearest grid cells to every registry point, by projected distance."""
+    return point_neighbours(registry.virtual_points(), k)
+
+
+def point_neighbours(points: list[VirtualPoint], k: int = K_NEIGHBOURS) -> list[Neighbour]:
+    """The k nearest grid cells to each point, by projected distance."""
     xs, ys = grid_axes()
     dx = float(xs[1] - xs[0])
     out = []
-    for vp in registry.virtual_points():
+    for vp in points:
         px, py = _PROJ(vp.lon, vp.lat)
         c0, r0 = int(round((px - xs[0]) / dx)), int(round((py - ys[0]) / dx))
         cands = [
@@ -130,24 +146,83 @@ def _cycle_url(init: datetime, kind: str) -> str:
     return f"{BASE_URL}/sfc/{init:%Y%m%d}/{init:%Y%m%d_%H}z_{kind}.zarr"
 
 
-def _read_cells(url: str, cells: list[Neighbour], with_time: bool) -> np.ndarray | None:
-    """Values at ``cells``: shape (n_time, n_cells) for fcst, (1, n_cells) for anl."""
-    chunks = {(n.row // CHUNK, n.col // CHUNK) for n in cells}
-    decoded = {}
-    for cy, cx in chunks:
-        key = f"0.{cy}.{cx}" if with_time else f"{cy}.{cx}"
-        raw = _get(f"{url}/{key}")
-        if raw is None:
-            return None
-        # Every field is <f4 with the whole time axis in one chunk (18 or 48 leads), so the
-        # decoded size gives the time length and the .zarray round trip can be skipped.
-        values = np.frombuffer(_BLOSC.decode(raw), dtype="<f4")
-        decoded[cy, cx] = values.reshape(-1, CHUNK, CHUNK)
-    nt = next(iter(decoded.values())).shape[0]
-    out = np.empty((nt, len(cells)), dtype="float64")
-    for i, n in enumerate(cells):
-        out[:, i] = decoded[n.row // CHUNK, n.col // CHUNK][:, n.row % CHUNK, n.col % CHUNK]
+@cache
+def window() -> tuple[int, int, int, int]:
+    """Grid rows [r0, r1) and columns [c0, c1) covering ``WINDOW_BOUNDS`` plus the margin."""
+    xs, ys = grid_axes()
+    dx = float(xs[1] - xs[0])
+    lat0, lat1, lon0, lon1 = WINDOW_BOUNDS
+    rows, cols = [], []
+    for lat in (lat0, lat1):
+        for lon in (lon0, lon1):
+            px, py = _PROJ(lon, lat)
+            cols.append(int(round((px - xs[0]) / dx)))
+            rows.append(int(round((py - ys[0]) / dx)))
+    m = WINDOW_MARGIN
+    return min(rows) - m, max(rows) + m + 1, min(cols) - m, max(cols) + m + 1
+
+
+def _read_window(url: str, with_time: bool) -> np.ndarray | None:
+    """One field over the window: shape (n_time, rows, cols), float32, NaN for fill."""
+    r0, r1, c0, c1 = window()
+    out = None
+    for cy in range(r0 // CHUNK, (r1 - 1) // CHUNK + 1):
+        for cx in range(c0 // CHUNK, (c1 - 1) // CHUNK + 1):
+            key = f"0.{cy}.{cx}" if with_time else f"{cy}.{cx}"
+            raw = _get(f"{url}/{key}")
+            if raw is None:
+                return None
+            # Every field is <f4 with the whole time axis in one chunk (18 or 48 leads), so the
+            # decoded size gives the time length and the .zarray round trip can be skipped.
+            block = np.frombuffer(_BLOSC.decode(raw), dtype="<f4").reshape(-1, CHUNK, CHUNK)
+            if out is None:
+                out = np.full((block.shape[0], r1 - r0, c1 - c0), np.nan, dtype="float32")
+            ra, rb = max(r0, cy * CHUNK), min(r1, (cy + 1) * CHUNK)
+            ca, cb = max(c0, cx * CHUNK), min(c1, (cx + 1) * CHUNK)
+            out[:, ra - r0 : rb - r0, ca - c0 : cb - c0] = block[
+                :, ra - cy * CHUNK : rb - cy * CHUNK, ca - cx * CHUNK : cb - cx * CHUNK
+            ]
     out[out == FILL] = np.nan
+    return out
+
+
+def _key(level: str, var: str) -> str:
+    return f"{level}__{var}"
+
+
+def tile_path(init: datetime) -> Path:
+    return settings.data_dir() / "hrrr" / "window" / f"{init:%Y/%m/%d}" / f"{init:%Y%m%d%H}.npz"
+
+
+def cycle_window(init: datetime) -> dict[str, np.ndarray]:
+    """Every field over the window for one cycle, (CACHE_LEADS + 1, rows, cols); index 0 is the analysis.
+
+    Read from the local copy when there is one, else fetched from the archive
+    and kept. Raises ``CycleMissing`` if the archive lacks any field.
+    """
+    path = tile_path(init)
+    if path.exists():
+        with np.load(path) as z:
+            if tuple(z["window"]) == window():
+                return {k: z[k] for k in z.files if k != "window"}
+    r0, r1, c0, c1 = window()
+    out = {}
+    for level, var in VARIABLES:
+        anl = _read_window(f"{_cycle_url(init, 'anl')}/{level}/{var}/{level}/{var}", with_time=False)
+        if anl is None:
+            raise CycleMissing(f"{init:%Y-%m-%dT%HZ} anl {level}/{var}")
+        fcst = _read_window(f"{_cycle_url(init, 'fcst')}/{level}/{var}/{level}/{var}", with_time=True)
+        if fcst is None:
+            raise CycleMissing(f"{init:%Y-%m-%dT%HZ} fcst {level}/{var}")
+        arr = np.full((CACHE_LEADS + 1, r1 - r0, c1 - c0), np.nan, dtype="float32")
+        arr[0] = anl[0]
+        n = min(CACHE_LEADS, fcst.shape[0])
+        arr[1 : n + 1] = fcst[:n]  # fcst time index 0 is f01
+        out[_key(level, var)] = arr
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.stem + ".tmp.npz")  # written whole, then renamed: no torn files
+    np.savez_compressed(tmp, window=np.array(window()), **out)
+    tmp.replace(path)
     return out
 
 
@@ -158,6 +233,7 @@ def fetch_cycle(
     *,
     model: str = "hrrr",
     product: str = "sfc",
+    tag: str | None = None,
     ingested_at: datetime | None = None,
 ) -> pa.Table:
     """One cycle's requested leads at every neighbour cell, as bronze.nwp_point rows.
@@ -167,22 +243,18 @@ def fetch_cycle(
     """
     init = init.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
     ingested_at = ingested_at or datetime.now(UTC)
-    fcst_leads = [h for h in leads if h > 0]
+    if any(h > CACHE_LEADS for h in leads):
+        raise ValueError(f"leads beyond f{CACHE_LEADS:02d} aren't kept in the window")
+    r0, r1, c0, c1 = window()
+    if outside := [c.point_id for c in cells if not (r0 <= c.row < r1 and c0 <= c.col < c1)]:
+        raise ValueError(f"points outside the kept window {WINDOW_BOUNDS}: {sorted(set(outside))}")
+    rows = np.array([c.row - r0 for c in cells])
+    cols = np.array([c.col - c0 for c in cells])
+    win = cycle_window(init)
     frames = []
     for (level, var), (name, level_label) in VARIABLES.items():
-        per_lead: dict[int, np.ndarray] = {}
-        if 0 in leads:
-            vals = _read_cells(f"{_cycle_url(init, 'anl')}/{level}/{var}/{level}/{var}", cells, with_time=False)
-            if vals is None:
-                raise CycleMissing(f"{init:%Y-%m-%dT%HZ} anl {level}/{var}")
-            per_lead[0] = vals[0]
-        if fcst_leads:
-            vals = _read_cells(f"{_cycle_url(init, 'fcst')}/{level}/{var}/{level}/{var}", cells, with_time=True)
-            if vals is None:
-                raise CycleMissing(f"{init:%Y-%m-%dT%HZ} fcst {level}/{var}")
-            for h in fcst_leads:
-                if h <= vals.shape[0]:
-                    per_lead[h] = vals[h - 1]  # fcst time index 0 is f01
+        arr = win[_key(level, var)]
+        per_lead = {h: arr[h, rows, cols].astype("float64") for h in leads}
         for h, v in per_lead.items():
             frames.append(
                 pd.DataFrame(
@@ -207,15 +279,16 @@ def fetch_cycle(
     df["product"] = product
     df["init_time"] = pd.Timestamp(init)
     df["member"] = np.int32(0)
-    df["ingest_batch"] = batch_id(model, init)
+    df["ingest_batch"] = batch_id(model, init, tag)
     df["ingested_at"] = pd.Timestamp(ingested_at)
     return pa.Table.from_pandas(
         df[NWP_POINT_SCHEMA.column_names], schema=NWP_POINT_SCHEMA.as_arrow(), preserve_index=False
     )
 
 
-def batch_id(model: str, init: datetime) -> str:
-    return f"{model}zarr/{init:%Y-%m-%dT%H}"
+def batch_id(model: str, init: datetime, tag: str | None = None) -> str:
+    """``hrrrzarr/<cycle>`` for the registry pass; ``hrrrzarr/<tag>/<cycle>`` for a points-only pass."""
+    return f"{model}zarr/{tag}/{init:%Y-%m-%dT%H}" if tag else f"{model}zarr/{init:%Y-%m-%dT%H}"
 
 
 def cycles(start: datetime, end: datetime, stride_h: int = 1) -> list[datetime]:
@@ -245,9 +318,16 @@ def backfill(
     workers: int = 16,
     commit_every: int = 48,
     model: str = "hrrr",
+    points: list[VirtualPoint] | None = None,
+    tag: str | None = None,
     log=print,
 ) -> dict[str, int]:
     """Fetch every missing cycle in [start, end) and append to bronze.nwp_point.
+
+    By default the points are the registry's. A points-only pass (``points``
+    plus a ``tag`` naming that set) records its own batch ids, so it covers
+    cycles the registry pass already did; with the window kept on disk it
+    reads no network for those cycles.
 
     Cycles already recorded in bronze snapshot summaries are skipped, so this
     is safe to interrupt and rerun. Archive gaps are logged and left for a
@@ -259,13 +339,13 @@ def backfill(
     from microcast.lake.catalog import append_bronze, recorded_batches
 
     done = recorded_batches("bronze.nwp_point")
-    todo = [c for c in cycles(start, end, stride_h) if batch_id(model, c) not in done]
+    todo = [c for c in cycles(start, end, stride_h) if batch_id(model, c, tag) not in done]
     stats = {"skipped": 0, "fetched": 0, "missing": 0, "rows": 0}
     stats["skipped"] = len(cycles(start, end, stride_h)) - len(todo)
     log(f"{len(todo)} cycles to fetch, {stats['skipped']} already in bronze")
     if not todo:
         return stats
-    cells = neighbours(registry)
+    cells = neighbours(registry) if points is None else point_neighbours(points)
     pending: list[pa.Table] = []
     pending_ids: list[str] = []
 
@@ -279,12 +359,12 @@ def backfill(
             pending_ids.clear()
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(fetch_cycle, c, cells, leads, model=model): c for c in todo}
+        futures = {pool.submit(fetch_cycle, c, cells, leads, model=model, tag=tag): c for c in todo}
         for fut in as_completed(futures):
             init = futures[fut]
             try:
                 pending.append(fut.result())
-                pending_ids.append(batch_id(model, init))
+                pending_ids.append(batch_id(model, init, tag))
                 stats["fetched"] += 1
             except CycleMissing as e:
                 stats["missing"] += 1

@@ -81,8 +81,10 @@ Then, in order:
    hourly cycles" below. MADIS finished (18.8M rows; 51 hours missing, mostly
    the last day not yet archived: rerun `backfill madis` to fill), and the
    PurpleAir transect is in bronze (115,110 rows).
-2. HRRR at the Synoptic/MADIS stations: a points-only pass over 2025-04 →
-   now (D10, "For code"), then add those stations to gold so the
+2. HRRR at the Synoptic/MADIS stations: **running** (2026-10-05 night),
+   `backfill hrrr --points network --tag net1`, 42 points, 2025-04 → now,
+   keeping each cycle's Bay Area window on disk (D10). Log
+   `data/logs/backfill-hrrr-net1.log`. Then add those stations to gold so the
    Castro/park stations enter the backtest. The MADIS history means they
    don't have to wait for accrual.
 3. PurpleAir: discovery done, budget agreed (250k points). Nine transect
