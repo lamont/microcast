@@ -64,59 +64,47 @@ rolling monthly folds).
 - [x] **PurpleAir:** real sensor index in `.env`; channel B cleaned and
   agreeing with A again (D5); API key added, points plan in D10.
 
-## Handoff (2026-10-05, end of session)
+## Handoff (2026-10-06, end of session)
 
-Two loads were running when this was written; both resume where they stop.
+Nothing is running. Every load finished and the lake is current to
+2026-10-06 ~19Z (Synoptic obs, HRRR to the 18Z run). Rerunning any backfill
+command resumes; HRRR for new points inside the kept window reads from disk.
 
-- **HRRR hourly fill** (`backfill hrrr --stride 1`): **finished**, +8,482
-  cycles (≈13,000 of 13,176 hourly cycles 2025-04 → 2026-09; 124 missing
-  from the archive, mostly 23Z; fillable from GRIB).
-- **MADIS** (`backfill madis --start 2025-04-01 --end 2026-10-05T21`): about
-  13–14 h total at 3 workers, under `caffeinate`. Log
-  `data/logs/backfill-madis.log`.
+Done this session (details in the Results sections below):
 
-Then, in order:
-
-1. ~~Rebuild on hourly cycles~~ **done 2026-10-05 21:00**: see "Results on
-   hourly cycles" below. MADIS finished (18.8M rows; 51 hours missing, mostly
-   the last day not yet archived: rerun `backfill madis` to fill), and the
-   PurpleAir transect is in bronze (115,110 rows).
-2. HRRR at the Synoptic/MADIS stations: **done 2026-10-06 00:35**,
-   `backfill hrrr --points network --tag net1`: 42 points, 13,141 cycles
-   (125 missing from the archive), 200.9M rows (bronze.nwp_point 184 →
-   705 MB). The Bay Area window is kept for every cycle: 2.4 GB under
-   `data/hrrr/window/` (D10). **The stations are in gold and the backtest**
-   (2026-10-06 01:44): see "Results with the network stations" below.
-3. PurpleAir: discovery done, budget agreed (250k points). Nine transect
-   sensors, now ten (Ocean Beach → Castro, `kind: purpleair_network` in
-   `config/places.yaml`) are pulled as hourly temperature, 2025-04 → now, by
-   `microcast backfill purpleair` into `data/purpleair/history/` (stops at
-   750k points left). **Pulled 2026-10-05:** 117,709 rows (ten sensors) for about 237k points
-   (763,003 left, about $24 at $10 per 100k). pa_110410 (Noriega, history only
-   from 2026-09-15) was swapped for pa_105692, and pa_117947 (States St) added
-   because pa_284234 starts 2025-07-22 with about half its hours missing;
-   pa_295103 starts 2025-12-23. The dropped sensor's responses stay in the
-   cache and aren't loaded. Once MADIS is done: `microcast backfill purpleair --load`
-   appends them to bronze.obs and bronze.stations. Live polling will be hourly,
-   not every 10 min. **Judged 2026-10-06**: a small, real temperature gain
-   (see "PurpleAir with vs without"); no more history purchases.
-4. Scheduled collectors as Dagster jobs on the swarm k3s cluster (D12), not
-   CronJobs: Synoptic daily (the free tier keeps only 7 days, so pull from the
-   laptop at least weekly until then), PurpleAir LAN every 2 min, HRRR live
-   hourly; status site internal at weather.henry.st (D8).
+- **HRRR:** hourly cycles 2025-04 → now at the registry points; a
+  points-only pass (`--points network --tag net1`) at 42 network stations;
+  each cycle's Bay Area window kept in `data/hrrr/window/` (2.4 GB, D10).
+- **MADIS:** 18.8M rows, 2025-04 → 2026-10-04. 51 hours missing, mostly the
+  last day not yet archived: rerun `backfill madis` to fill.
+- **PurpleAir transect:** ten public sensors, hourly temperature 2025-04 →
+  now, ~237k API points (763k left). As inputs (`gbm_purpleair`) they cut
+  temperature CRPS by 1.2–1.7% and do nothing for gust. No more history
+  purchases (D10).
+- **Gold and backtest:** 36 truth stations (the original four plus the MADIS
+  network). The gate is judged on the original four; it passes (temperature
+  +43% / +30%, gust +30% / +27%).
+- **Site:** a model picker and hover highlighting, ready for more models.
 
 ## Next
 
-1. Finish the hourly HRRR fill, rebuild, rerun, refresh the site.
-2. Dagster on the laptop (`dagster dev`): wrap the ingest, backfill and
-   build commands as partitioned assets with schedules and per-table
-   concurrency pools, declared in `defs.yaml` where possible (D12). Then
-   Postgres and the `dagster/dagster` Helm chart on the swarm cluster.
-3. HRRR at the Synoptic stations: a points-only pass for the weeks they have
-   obs (D10), then they enter backtests once ~4 months have accrued.
-4. Backyard station (D5); confirm the model first.
-5. First look at `lcc` and DSWRF vs the CWOP solar sensors for D2.
-6. Status site on k3s, internal at weather.henry.st (D8).
+1. Synoptic: `microcast ingest synoptic` at least weekly (the free tier keeps
+   7 days; the trial ends ~2026-10-19, then check what the account becomes).
+2. Data quality: a per-station sanity check in silver (GGBC1 reported
+   temperatures ~26 °C off that passed the range check).
+3. Live inference, first cut: the newest HRRR run (live GRIB) through the
+   trained GBMs for the house, the Castro stations and the ride. HRRR's raw
+   wind is far too high inside Golden Gate Park (604PG sees ~22% of it on
+   afternoons), so the ride needs a corrected wind, not raw HRRR.
+4. Dagster on the laptop (`dagster dev`), when picked back up: the ingest,
+   backfill and build commands as partitioned assets with schedules and
+   per-table concurrency pools, declared in `defs.yaml` where possible (D12);
+   then Postgres and the `dagster/dagster` Helm chart on the swarm cluster.
+5. A leaner PurpleAir feature set (the two transect summaries only) against
+   the 32-feature version.
+6. Backyard station (D5); confirm the model first.
+7. First look at `lcc` and DSWRF vs the CWOP solar sensors for D2.
+8. Status site on k3s, internal at weather.henry.st (D8).
 
 ## Not in phase 1
 

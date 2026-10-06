@@ -20,7 +20,7 @@ reproducible.
 ## What exists today vs. what's planned
 
 The [design doc](docs/design.md) describes the full system. Most of it is not
-built yet. As of 2026-10-05:
+built yet. As of 2026-10-06:
 
 **Built and running on a laptop (phase 1)**
 
@@ -45,8 +45,8 @@ built yet. As of 2026-10-05:
 
 | Source | What it gives us | Stations / coverage | How it's pulled | State |
 | --- | --- | --- | --- | --- |
-| HRRR via Herbie (NOAA on AWS) | Forecast fields (temperature, dewpoint, wind, gust, rain, visibility, sunlight, cloud) at our points, leads 0–6 h | ~27 points around SF | `microcast ingest nwp` (live GRIB) | Works; run by hand |
-| HRRR history (University of Utah hrrrzarr archive) | The same fields for past cycles | Hourly cycles 2025-04 → 2026-09, ~13,000 cycles (124 missing in the archive) | `microcast backfill hrrr` | Loaded |
+| HRRR via Herbie (NOAA on AWS) | Forecast fields (temperature, dewpoint, wind, gust, rain, visibility, sunlight, cloud) at our points | ~27 registry points around SF | `microcast ingest nwp` (live GRIB; the newest run, ~1 h after its start) | Works; run by hand |
+| HRRR history (University of Utah hrrrzarr archive) | The same fields for past cycles, up to 18 h ahead | Hourly cycles 2025-04 → now (~13,000; 124 missing in the archive), at the registry points and 42 network stations. Each cycle's Bay Area window is kept on disk (2.4 GB), so a new point inside it needs no download | `microcast backfill hrrr` (`--points network` for the stations) | Loaded; the archive runs ~3 h behind real time |
 | IEM ASOS | Airport observations: temperature, dewpoint, wind, gust | KSFO (SFO), KOAK (Oakland) | `microcast ingest obs` | Loaded 2025-04 → now |
 | IEM HADS | Hourly temperature | SFOC1 (the Mint, downtown SF; the house's stand-in) | `microcast ingest obs` | Loaded 2025-04 → now |
 | NDBC | Temperature, wind, gust | FTPC1 (Fort Point, Golden Gate) | `microcast ingest obs` | Loaded 2025-04 → now |
@@ -93,8 +93,10 @@ Phase 1 end to end (history → backtest → status site):
 
 ```sh
 uv run microcast ingest obs --start 2025-04-01            # station truth, no keys needed
-uv run microcast backfill hrrr --start 2025-04-01 --end 2026-10-01 --stride 3   # resumable
-uv run microcast build silver && uv run microcast build gold
+uv run microcast backfill hrrr --start 2025-04-01 --end 2026-10-01   # hourly cycles, resumable
+uv run microcast backfill madis --start 2025-04-01 --end 2026-10-01  # network stations' history
+uv run microcast backfill hrrr --start 2025-04-01 --end 2026-10-01 --points network --tag net1
+uv run microcast build silver && uv run microcast build gold        # gold: 36 truth stations
 uv run microcast backtest                                 # -> gold.scores, MLflow, data/reports/
 uv run microcast compare                                  # leaderboard vs raw HRRR
 uv run microcast site --out site                          # static pages for weather.henry.st
@@ -125,12 +127,12 @@ src/microcast/
   ingest/nwp.py    Herbie subset → pick_points(k=4) → long Arrow (live)
   ingest/hrrr_zarr.py  HRRR history from the hrrrzarr archive (backfill)
   ingest/obs.py    station truth: IEM ASOS/HADS, NDBC
-  ingest/purpleair.py  own PurpleAir sensor (LAN or API)
+  ingest/purpleair.py  own PurpleAir sensor (LAN or API), public transect history
   ingest/synoptic.py   Synoptic/CWOP stations (last 7 days, accrues)
   ingest/madis.py  MADIS mesonet history (CWOP, PG&E stations), streamed hourly
   lake/copy.py     copy bronze to another catalog (laptop -> cluster)
-  transform/       bronze → silver → gold (DuckDB SQL)
-  models/          Forecaster zoo: raw_hrrr, bias_rolling, gbm_residual
+  transform/       bronze → silver → gold (DuckDB SQL); network.py: PurpleAir transect features
+  models/          Forecaster zoo: raw_hrrr, bias_rolling, gbm_residual, gbm_purpleair
   backtest/        folds, CRPS, skill + bootstrap CI, leaderboard
   pipeline.py      backtest orchestration + MLflow
   site/            static status site (weather.henry.st)
