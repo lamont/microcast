@@ -13,8 +13,8 @@ Iceberg lake → features → competing models → backtests → live inference,
 reproducible.
 
 - [Design doc](docs/design.md): the original design.
-- [Decisions](docs/decisions.md): changes since then (D1–D12). These take
-  precedence over the design doc.
+- [Decisions](docs/decisions.md): changes since then, numbered D1–D12 (the
+  "D" ids cited below). These take precedence over the design doc.
 - [Phase 1 spec](docs/specs/phase-1.md): what's built and what's next.
 
 ## What exists today vs. what's planned
@@ -28,17 +28,33 @@ built yet. As of 2026-10-05:
   forecast points (`config/places.yaml`).
 - A local Iceberg lake (PyIceberg with a SQLite catalog, Parquet files under
   `./data`) with bronze, silver and gold layers, queried through DuckDB.
-- Ingest: HRRR (live via Herbie, history via the hrrrzarr archive, hourly
-  cycles 2025-04 → 2026-09), station observations (IEM ASOS/HADS, NDBC), Synoptic
-  stations (last 7 days only), MADIS mesonet history, and the home PurpleAir
-  sensor (LAN or API).
+- Ingest from nine working data sources (table below) into the lake's bronze layer.
 - Three models behind one interface: raw HRRR, a rolling-bias correction, and
   a LightGBM residual model.
 - Backtests on rolling monthly folds with CRPS skill and bootstrap CIs, logged
   to MLflow (SQLite file). **The phase 1 gate is passed:** the GBM residual
   beats raw HRRR at 0–6 h by about 20–40% for temperature and gust
   ([results](docs/specs/phase-1.md#results-gate-passed-2026-10-05)).
-- A static status site (Status and Analytics pages) built from the lake.
+- A static status site (Status and Analytics pages) built from the lake; it
+  runs locally, not hosted yet.
+
+**Data sources that work today**
+
+| Source | What it gives us | Stations / coverage | How it's pulled | State |
+| --- | --- | --- | --- | --- |
+| HRRR via Herbie (NOAA on AWS) | Forecast fields (temperature, dewpoint, wind, gust, rain, visibility, sunlight, cloud) at our points, leads 0–6 h | ~27 points around SF | `microcast ingest nwp` (live GRIB) | Works; run by hand |
+| HRRR history (University of Utah hrrrzarr archive) | The same fields for past cycles | Hourly cycles 2025-04 → 2026-09, ~13,000 cycles (124 missing in the archive) | `microcast backfill hrrr` | Loaded |
+| IEM ASOS | Airport observations: temperature, dewpoint, wind, gust | KSFO (SFO), KOAK (Oakland) | `microcast ingest obs` | Loaded 2025-04 → now |
+| IEM HADS | Hourly temperature | SFOC1 (the Mint, downtown SF; the house's stand-in) | `microcast ingest obs` | Loaded 2025-04 → now |
+| NDBC | Temperature, wind, gust | FTPC1 (Fort Point, Golden Gate) | `microcast ingest obs` | Loaded 2025-04 → now |
+| Synoptic | Temperature, wind, gust, solar radiation | 604PG (PG&E, Golden Gate Park) and five CWOP home stations in the Castro | `microcast ingest synoptic` | Works; free tier keeps 7 days, so it accrues from 2026-09-28 |
+| MADIS mesonet archive | History for the same Synoptic stations plus ~25 more in the SF box (CWOP, PG&E, Presidio, Marin headlands) | 2025-04 → now | `microcast backfill madis` | Loading (finishes 2026-10-05 night) |
+| PurpleAir, own sensor | PM2.5 on both laser channels, sensor temperature, humidity, pressure | The outdoor PA-II at the house | `microcast ingest purpleair` (home network, free) | Works; run by hand |
+| PurpleAir, public transect | Hourly sensor temperature | 10 public sensors, Ocean Beach → Sunset → Twin Peaks → Castro, 2025-04 → now | `microcast backfill purpleair` (paid API points) | Pulled to local files; loads into the lake after MADIS |
+
+Only the four original truth stations (SFOC1, KSFO, KOAK, FTPC1) feed the
+backtest today. The Synoptic, MADIS and PurpleAir stations
+are in the lake but not yet in the models.
 
 **Planned, not built**
 
@@ -47,9 +63,11 @@ built yet. As of 2026-10-05:
   ([D12](docs/decisions.md#d12--dagster-on-k3s-runs-the-collectors-not-cronjobs)).
   Until then, every collector is run by hand.
 - MinIO/S3 storage and the Lakekeeper REST catalog.
-- PurpleAir neighbourhood network: nine transect sensors' history is being
-  pulled (D10); live polling and using them as model features are not built.
-  Also a backyard weather station, and HRRR at the newer stations.
+- HRRR at the Synoptic, MADIS and PurpleAir stations, so they can enter
+  backtests; using the PurpleAir transect as model features; hourly live
+  PurpleAir polling (D10).
+- A backyard weather station at the house (D5).
+- Hosting the status site at weather.henry.st (D8).
 - Live inference, the forecast panel on the site, and plain-language alerts
   to Slack.
 - More NWP models (RRFS, REFS, GFS), and cloud-cover forecasts.
@@ -127,10 +145,13 @@ git-ignored. The status site shows station and place ids and scores only.
 
 ## Glossary
 
+### Acronyms
+
 | Term | Meaning |
 | --- | --- |
 | API | Application Programming Interface |
 | ASOS | Automated Surface Observing System: the airport weather stations (KSFO, KOAK) |
+| AWS | Amazon Web Services: where NOAA publishes HRRR through its Open Data program |
 | CI | Confidence interval (here, from a bootstrap: resampling the scores many times) |
 | CLI | Command-line interface (`microcast …`) |
 | CRPS | Continuous Ranked Probability Score: error of a probabilistic forecast, in the variable's units; lower is better |
@@ -147,10 +168,10 @@ git-ignored. The status site shows station and place ids and scores only.
 | LCC | Low Cloud Cover: HRRR's low-cloud-layer fraction |
 | MADIS | Meteorological Assimilation Data Ingest System: NOAA's archive of mesonet observations |
 | Mesonet | A mesoscale network: dense non-federal weather stations |
-| MLflow | An open-source experiment tracker (runs, parameters, metrics, models) |
 | NDBC | National Data Buoy Center: buoys and coastal stations (FTPC1, Fort Point) |
 | NOAA | National Oceanic and Atmospheric Administration |
 | NWP | Numerical Weather Prediction: physics-based weather models such as HRRR |
+| PA-II | PurpleAir's outdoor sensor model, with two laser particle counters (channels A and B) |
 | PG&E | Pacific Gas and Electric: the utility, which runs its own weather stations (604PG) |
 | PIT | Probability Integral Transform: a calibration check for probabilistic forecasts |
 | PM2.5 | Particulate matter under 2.5 µm, what PurpleAir sensors measure |
@@ -160,7 +181,40 @@ git-ignored. The status site shows station and place ids and scores only.
 | RRFS | Rapid Refresh Forecast System: NOAA's successor to HRRR |
 | S3 | Amazon Simple Storage Service, and the object-storage API MinIO also speaks |
 | SF | San Francisco |
+| SFO | San Francisco International Airport |
 | SQL | Structured Query Language |
+| WMO | World Meteorological Organization |
 
-Bronze, silver and gold are the lake's layers: raw data as ingested, cleaned
-and aligned data, and model-ready features, forecasts and scores.
+### Tools and terms
+
+| Name | Meaning |
+| --- | --- |
+| Backtest | Replaying history: train on past months, forecast the next month as if live, score against what happened |
+| Bronze / silver / gold | The lake's layers: raw data as ingested; cleaned and aligned data; model-ready features, forecasts and scores |
+| Dagster | A data orchestrator: runs jobs on schedules or triggers, and backfills partitioned data |
+| DuckDB | An in-process SQL database used to query the lake's Parquet files |
+| Herbie | A Python library that finds and downloads NWP output (GRIB) from NOAA's cloud archives |
+| hrrrzarr | The University of Utah's archive of HRRR in Zarr format: small chunks, so a few points are cheap to read |
+| Iceberg | Apache Iceberg: a table format over Parquet files with snapshots (every write is a versioned commit) |
+| Lakekeeper | An Iceberg catalog server (REST); planned to replace the local SQLite catalog |
+| LightGBM | Microsoft's gradient-boosting library |
+| MinIO | Self-hosted object storage that speaks the S3 API |
+| MLflow | An open-source experiment tracker (runs, parameters, metrics, models) |
+| Parquet | Apache Parquet: a columnar file format |
+| PurpleAir | A network of low-cost air-quality sensors with a public map and a paid API (points) |
+| PyIceberg | The Python library for reading and writing Iceberg tables |
+| Residual model | A model that predicts HRRR's error at a station, then adds it back to HRRR's forecast |
+| SQLite | A single-file SQL database; holds the local Iceberg catalog and MLflow runs |
+| Synoptic | Synoptic Data: a company aggregating weather stations (CWOP, PG&E, …) behind an API |
+| Zarr | A chunked array format for cloud storage |
+
+### Station ids
+
+| Id | Meaning |
+| --- | --- |
+| SFOC1 | SF Downtown at the Mint (NOAA HADS), ~1 km from the house; hourly temperature |
+| KSFO / KOAK | San Francisco and Oakland airport ASOS stations |
+| FTPC1 | Fort Point at the Golden Gate (NDBC) |
+| 604PG | PG&E station at the west end of JFK Drive, Golden Gate Park |
+| C5988, F6803, E9227, F2543, F4637 | CWOP home weather stations around the Castro and Corona Heights |
+| pa_<index> | A public PurpleAir sensor on the transect, by its PurpleAir sensor number |
