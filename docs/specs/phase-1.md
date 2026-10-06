@@ -98,7 +98,8 @@ Then, in order:
    pa_295103 starts 2025-12-23. The dropped sensor's responses stay in the
    cache and aren't loaded. Once MADIS is done: `microcast backfill purpleair --load`
    appends them to bronze.obs and bronze.stations. Live polling will be hourly,
-   not every 10 min; judge whether the data helps before spending more.
+   not every 10 min. **Judged 2026-10-06**: a small, real temperature gain
+   (see "PurpleAir with vs without"); no more history purchases.
 4. Scheduled collectors as Dagster jobs on the swarm k3s cluster (D12), not
    CronJobs: Synoptic daily (the free tier keeps only 7 days, so pull from the
    laptop at least weekly until then), PurpleAir LAN every 2 min, HRRR live
@@ -121,6 +122,33 @@ Then, in order:
 
 Docker Compose (skipped, D12), MinIO/Lakekeeper, RRFS/REFS ingest, alerts.
 Dagster moves into phase 1 as the scheduler (D12).
+
+## PurpleAir with vs without (2026-10-06)
+
+`gbm_purpleair` is `gbm_residual` plus 32 transect features from
+`gold.network_features`: each of the 10 sensors' 1 h and 3 h change and its
+anomaly against the same hour over the last 14 days, the transect mean
+anomaly, and west minus east. Only hours complete at init are used. Same
+folds, same rows, 36 stations. CRPS change vs `gbm_residual`, paired, with a
+95% day-block bootstrap interval (negative = PurpleAir model better):
+
+| Target | Stations | 1–3 h | 4–6 h |
+| --- | --- | --- | --- |
+| Temperature | all 36 | **−1.2%** [−0.6, −1.8] | **−1.3%** [−0.7, −2.0] |
+| Temperature | original 4 | **−1.5%** [−0.8, −2.1] | **−1.7%** [−1.1, −2.4] |
+| Gust | all 36 | +0.1% [−0.1, +0.3] | +0.3% [+0.1, +0.5] |
+| Gust | original 4 | −0.3% [−0.5, −0.1] | −0.3% [−0.5, 0.0] |
+
+- **Temperature: a small, real gain.** It is largest on the west side and in
+  the afternoon: D5422 (west end of the park) −3.1%, FTPC1 −2.2%, 604PG
+  −2.0%; afternoons −1.75% vs mornings −0.9%. May–Sep and Oct–Apr are about
+  the same (−1.4% vs −1.2%).
+- **Gust: nothing.** Expected: PurpleAir has no wind sensor.
+- **Verdict on the spend** (~237k points, ~$24, D10): the transect earns a
+  place as a temperature input, but it is a percent or two, not a step change.
+  Don't buy more history. Hourly live polling (~$1.50/month) is worth running
+  for the live model; revisit if a leaner feature set (the two summaries
+  only) or the backyard station does as well.
 
 ## Results with the network stations (2026-10-06)
 

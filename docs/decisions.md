@@ -370,6 +370,12 @@ every 10 minutes is about 7–9k points a day (the whole key in roughly four
 months), and hourly is about 1.2–1.5k a day. Responses are saved under
 `data/purpleair/` (not in git).
 
+**Outcome (2026-10-06).** Ten sensors (Noriega swapped for a sensor with
+history, a second Castro sensor added), ~237k points. As model inputs they
+cut temperature CRPS by 1.2–1.7% (95% CI excludes zero) and do nothing for
+gust (phase-1 spec, "PurpleAir with vs without"). Kept as inputs to
+`gbm_purpleair`; no further history purchases.
+
 **For code.** Stations added after a cycle was backfilled have no HRRR rows
 for it, and a rerun skips the cycle because its batch id is already recorded.
 Before these stations enter a backtest, backfill HRRR for just the new points

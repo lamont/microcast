@@ -29,8 +29,9 @@ built yet. As of 2026-10-05:
 - A local Iceberg lake (PyIceberg with a SQLite catalog, Parquet files under
   `./data`) with bronze, silver and gold layers, queried through DuckDB.
 - Ingest from nine working data sources (table below) into the lake's bronze layer.
-- Three models behind one interface: raw HRRR, a rolling-bias correction, and
-  a LightGBM residual model.
+- Four models behind one interface: raw HRRR, a rolling-bias correction, a
+  LightGBM residual model, and the same LightGBM with the PurpleAir transect
+  as extra inputs (1–2% better on temperature, no help on gust).
 - Backtests on rolling monthly folds with CRPS skill and bootstrap CIs, logged
   to MLflow (SQLite file). **The phase 1 gate is passed:** at the four original stations
   the GBM residual beats raw HRRR at 0–6 h by about 30–43% for temperature
@@ -56,8 +57,8 @@ built yet. As of 2026-10-05:
 
 The backtest trains and scores at 36 stations: the four original truth
 stations (SFOC1, KSFO, KOAK, FTPC1) plus the MADIS network, which includes
-the Synoptic stations. The PurpleAir sensors are in the lake but not yet used
-by any model.
+the Synoptic stations. The PurpleAir sensors are inputs to one model, never truth
+(their temperature reads hot).
 
 **Planned, not built**
 
@@ -66,8 +67,7 @@ by any model.
   ([D12](docs/decisions.md#d12--dagster-on-k3s-runs-the-collectors-not-cronjobs)).
   Until then, every collector is run by hand.
 - MinIO/S3 storage and the Lakekeeper REST catalog.
-- Using the PurpleAir transect as model inputs (a "with vs. without" model
-  pair to judge it), and hourly live PurpleAir polling (D10).
+- Hourly live PurpleAir polling (D10).
 - A backyard weather station at the house (D5).
 - Hosting the status site at weather.henry.st (D8).
 - Live inference, the forecast panel on the site, and plain-language alerts
