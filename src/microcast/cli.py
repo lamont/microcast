@@ -316,12 +316,23 @@ def build_silver(
 
 
 @build_app.command("gold")
-def build_gold() -> None:
-    """Rebuild gold.training_examples at every registry station."""
+def build_gold(
+    stations: str = typer.Option("network", help="'registry', or 'network': registry plus every MADIS station"),
+) -> None:
+    """Rebuild gold.training_examples at the truth stations.
+
+    PurpleAir sensors are never truth: their temperature reads hot inside the
+    housing (D10), so they can only be inputs.
+    """
+    from microcast.lake.catalog import get_catalog
     from microcast.transform import gold
 
-    stations = [s.id for s in registry_mod.load().stations]
-    typer.echo(f"gold.training_examples: {gold.rebuild(stations)} rows")
+    ids = {s.id for s in registry_mod.load().stations}
+    if stations == "network":
+        st = get_catalog().load_table("bronze.stations").scan(selected_fields=("source", "station_id")).to_arrow()
+        ids |= {r["station_id"] for r in st.to_pylist() if r["source"] == "madis"}
+    typer.echo(f"{len(ids)} truth stations")
+    typer.echo(f"gold.training_examples: {gold.rebuild(sorted(ids))} rows")
 
 
 @app.command("backtest")

@@ -79,3 +79,52 @@ def test_error_at_init_uses_this_cycles_f00():
     rows = _by_key(gold.build_training(_nwp(2), obs))
     assert rows[T0 + H, 120]["err_at_init_t2m"] == pytest.approx(1.5)
     assert rows[T0 + H, 120]["obs_last_t2m"] == 11.5
+
+
+def test_rolling_bias_matches_the_as_of_rule_by_brute_force():
+    """The windowed SQL against a direct reading of the rule, on random data with gaps."""
+    import random
+
+    rng = random.Random(7)
+    leads = (0, 1, 3, 6)
+    points = ("KSFO", "C5988")
+    rows = []
+    for p in points:
+        for c in range(24 * 20):  # 20 days of hourly cycles, so the 14-day window slides
+            init = T0 + c * H
+            for lead in leads:
+                rows.append(
+                    dict.fromkeys(NWP_FIELDS)
+                    | dict(t2m=10.0 + rng.random(), gust=5.0, wind10=3.0)
+                    | dict(model="hrrr", init_time=init, lead_min=60 * lead, valid_time=init + lead * H, point_id=p)
+                    | dict(ingested_at=init)
+                )
+    nwp = pa.Table.from_pylist(rows, schema=NWP_ALIGNED_SCHEMA.as_arrow())
+    obs = pa.Table.from_pylist(
+        [
+            dict(source="x", station_id=p, obs_time=T0 + h * H, variable="t2m", value=12.0 + 3 * rng.random(),
+                 qc_flag="ok", ingested_at=T0)
+            for p in points for h in range(24 * 21) if rng.random() > 0.2  # 20% of hours missing
+        ],
+        schema=OBS_QC_SCHEMA.as_arrow(),
+    )  # fmt: skip
+    got = {(r["point_id"], r["init_time"], r["lead_min"]): r for r in gold.build_training(nwp, obs).to_pylist()}
+    truth = {(r["station_id"], r["obs_time"]): r["value"] for r in obs.to_pylist()}
+    resid = {}
+    for r in rows:
+        if (o := truth.get((r["point_id"], r["valid_time"]))) is not None:
+            resid.setdefault((r["point_id"], r["lead_min"]), []).append((r["valid_time"], o - r["t2m"]))
+    checked = 0
+    for r in rows[::37]:  # a spread of rows across points, cycles and leads
+        issue = r["init_time"] + timedelta(minutes=gold.HRRR_ISSUE_DELAY_MIN)
+        seen = [
+            e for v, e in resid.get((r["point_id"], r["lead_min"]), [])
+            if v + timedelta(minutes=gold.OBS_DELAY_MIN) <= issue and v > issue - timedelta(days=gold.BIAS_WINDOW_DAYS)
+        ]  # fmt: skip
+        g = got[r["point_id"], r["init_time"], r["lead_min"]]
+        if seen:
+            assert g["bias14_t2m"] == pytest.approx(sum(seen) / len(seen))
+            checked += 1
+        else:
+            assert g["bias14_t2m"] is None
+    assert checked > 50

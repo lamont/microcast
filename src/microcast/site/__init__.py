@@ -105,17 +105,30 @@ def analytics(scores: pd.DataFrame) -> dict:
 
 
 def gate(board: pd.DataFrame) -> list[dict]:
-    """Phase 1 gate per target: the residual model's skill CI excludes 0 in both lead buckets."""
+    """Phase 1 gate per target: the residual model's skill CI excludes 0 in both lead buckets.
+
+    Judged on the original four stations when the backtest pooled them (it has
+    more stations since 2026-10-06), else on all stations.
+    """
     out = []
-    for variable, g in board[(board.model == GATE_MODEL) & (board.point == "all")].groupby("variable"):
+    point = "original" if (board.point == "original").any() else "all"
+    for variable, g in board[(board.model == GATE_MODEL) & (board.point == point)].groupby("variable"):
         out.append(
             dict(
                 variable=variable,
+                point=point,
                 passed=bool((g.skill_lo > 0).all()) and len(g) == len(backtest.LEAD_BUCKETS),
                 buckets=_records(g[["lead", "skill", "skill_lo", "skill_hi", "n"]]),
             )
         )
     return out
+
+
+def _stations(reg, scores: pd.DataFrame) -> list[dict]:
+    """Registry stations, then every other station the backtest scored (MADIS), by id."""
+    source = {s.id: s.source for s in reg.stations}
+    ids = sorted(set(source) | set(scores.point_id.unique()))
+    return [dict(id=i, source=source.get(i, "madis")) for i in ids]
 
 
 def build(out_dir: Path) -> Path:
@@ -135,7 +148,7 @@ def build(out_dir: Path) -> Path:
         monthly=_records(monthly),
         freshness=freshness(con),
         analytics=analytics(scores),
-        stations=[dict(id=s.id, source=s.source) for s in reg.stations],
+        stations=_stations(reg, scores),
         targets={"t2m": {"label": "Temperature", "unit": "°C"}, "gust": {"label": "Wind gust", "unit": "m/s"}},
     )
     out_dir.mkdir(parents=True, exist_ok=True)

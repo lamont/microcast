@@ -86,7 +86,7 @@ def run_backtests(
     replace_partition("gold.scores", scores, EqualTo("kind", "backtest"))
     log(f"gold.forecasts / gold.scores: {len(scored)} backtest rows")
 
-    board = backtest.leaderboard(scored)
+    board = backtest.leaderboard(scored, groups={"original": backtest.ORIGINAL_STATIONS})
     monthly = backtest.monthly_skill(scored)
     for (name, target), run_id in run_ids.items():
         rows = board[(board.model == name) & (board.variable == target) & (board.point == "all")]

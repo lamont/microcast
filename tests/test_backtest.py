@@ -77,3 +77,12 @@ def test_models_are_compared_on_common_rows_only():
     n = board[(board.point == "all")].groupby("model").n.sum()
     # The baseline is scored only where the challenger also forecast.
     assert n["raw_hrrr"] == n["bias_rolling"] == (kept.model_name == "bias_rolling").sum()
+
+
+def test_leaderboard_pools_named_station_groups():
+    a, b = _gold(), _gold(seed=1).assign(point_id="C5988")
+    scored = backtest.run(pd.concat([a, b], ignore_index=True), ["raw_hrrr", "bias_rolling"], ["t2m"], log=lambda _: None)
+    board = backtest.leaderboard(scored, n_boot=50, groups={"original": ["KSFO"], "empty": ["NOPE"]})
+    n = board[board.model == "bias_rolling"].groupby("point").n.sum()
+    assert n["original"] == n["KSFO"] and n["all"] == n["KSFO"] + n["C5988"]
+    assert "empty" not in n  # a group with no scored stations gets no row

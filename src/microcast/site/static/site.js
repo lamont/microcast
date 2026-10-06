@@ -360,7 +360,8 @@ function gateTiles(root, data) {
   const tiles = el("div", { class: "tiles" }, root);
   for (const g of data.gate) {
     const t = el("div", { class: "card tile" }, tiles);
-    el("div", { class: "label", text: `${data.targets[g.variable].label} · GBM residual vs raw HRRR` }, t);
+    const where = g.point === "original" ? " · 4 original stations" : "";
+    el("div", { class: "label", text: `${data.targets[g.variable].label} · GBM residual vs raw HRRR${where}` }, t);
     const near = g.buckets.find((b) => b.lead === "1-3 h");
     el("div", { class: "value", text: signedPct(near?.skill) }, t);
     el("div", { class: "detail", text: g.buckets.map((b) => `${b.lead}: ${signedPct(b.skill)} [${signedPct(b.skill_lo)}, ${signedPct(b.skill_hi)}]`).join(" · ") }, t);

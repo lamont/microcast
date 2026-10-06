@@ -15,7 +15,7 @@ Protocol (design doc, Backtesting and evaluation):
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 
 import numpy as np
@@ -162,14 +162,26 @@ def bootstrap_skill(paired: pd.DataFrame, n: int = 1000, seed: int = 7) -> tuple
     return float(skill), float(lo), float(hi)
 
 
-def leaderboard(scores: pd.DataFrame, n_boot: int = 1000) -> pd.DataFrame:
-    """One row per (variable, model, lead bucket, point or 'all'), on common rows only."""
+# The phase 1 gate's stations. Pooled separately so the gate stays comparable as
+# network stations join the backtest (D11).
+ORIGINAL_STATIONS = ("FTPC1", "KOAK", "KSFO", "SFOC1")
+
+
+def leaderboard(
+    scores: pd.DataFrame, n_boot: int = 1000, groups: dict[str, Collection[str]] | None = None
+) -> pd.DataFrame:
+    """One row per (variable, model, lead bucket, point), on common rows only.
+
+    ``point`` is a station id, ``all`` (every station pooled), or the name of a
+    group in ``groups`` (those stations pooled).
+    """
     scores = common_rows(scores).assign(bucket=lead_bucket(scores.lead_min))
     rows = []
     for model in sorted(scores.model_name.unique()):
         paired = _paired(scores, model)
         for (variable, bucket), g in paired.groupby(["variable", "bucket"]):
-            for point, gp in [("all", g), *g.groupby("point_id")]:
+            pooled = [(name, g[g.point_id.isin(ids)]) for name, ids in (groups or {}).items()]
+            for point, gp in [("all", g), *[(n, x) for n, x in pooled if len(x)], *g.groupby("point_id")]:
                 skill, lo, hi = bootstrap_skill(gp, n_boot)
                 rows.append(
                     dict(

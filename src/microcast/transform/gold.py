@@ -26,7 +26,7 @@ BIAS_WINDOW_DAYS = 14
 
 _nwp_cols = ",\n    ".join(f"n.{f} AS nwp_{f}" for f in NWP_FIELDS)
 
-TRAINING_SQL = f"""
+_TRAINING_SQL = f"""
 WITH obs_snap AS (
     SELECT station_id, variable, value, obs_time,
         time_bucket(INTERVAL 1 HOUR, obs_time + INTERVAL 30 MINUTE) AS hour
@@ -77,21 +77,14 @@ with_init AS (
     LEFT JOIN base f0 ON f0.point_id = b.point_id AND f0.init_time = b.init_time AND f0.lead_min = 0
 ),
 resid AS (
-    SELECT point_id, lead_min, valid_time,
+    SELECT point_id, init_time, lead_min, valid_time,
         obs_t2m - nwp_t2m AS r_t2m, obs_gust - nwp_gust AS r_gust
     FROM base
 ),
 rolling AS (
     -- Trailing error at the same point and lead, over residuals whose truth was
-    -- visible before issue_time.
-    SELECT a.point_id, a.init_time, a.lead_min,
-        avg(r.r_t2m) AS bias14_t2m, stddev_samp(r.r_t2m) AS std14_t2m,
-        avg(r.r_gust) AS bias14_gust, stddev_samp(r.r_gust) AS std14_gust
-    FROM base a
-    JOIN resid r ON r.point_id = a.point_id AND r.lead_min = a.lead_min
-        AND r.valid_time + INTERVAL {OBS_DELAY_MIN} MINUTE <= a.issue_time
-        AND r.valid_time > a.issue_time - INTERVAL {BIAS_WINDOW_DAYS} DAY
-    GROUP BY ALL
+    -- visible before issue_time: one window per lead (see _rolling_sql).
+    {{rolling}}
 )
 SELECT w.*, rolling.* EXCLUDE (point_id, init_time, lead_min)
 FROM with_init w
@@ -100,11 +93,41 @@ ORDER BY point_id, init_time, lead_min
 """
 
 
+def _rolling_sql(lead_min: int) -> str:
+    """Rolling bias for one lead as a range window over valid_time.
+
+    Within a lead, issue_time = valid_time - lead + 55 min, so the as-of window
+    (truth visible by issue_time, within the last 14 days) is a fixed range
+    relative to each row's valid_time. A window instead of a self-join keeps
+    this linear in rows: the join produced ~336 pairs per row.
+    """
+    # visible: r.valid + 5 min <= issue  <=>  r.valid <= valid - (lead - 50 min)
+    hi = lead_min - (HRRR_ISSUE_DELAY_MIN - OBS_DELAY_MIN)
+    hi_sql = f"INTERVAL {hi} MINUTE PRECEDING" if hi >= 0 else f"INTERVAL {-hi} MINUTE FOLLOWING"
+    # recent: r.valid > issue - 14 days  <=>  r.valid >= valid - (14 days + lead - 55 min) + 1 s
+    lo_s = (BIAS_WINDOW_DAYS * 1440 + lead_min - HRRR_ISSUE_DELAY_MIN) * 60 - 1
+    w = f"(PARTITION BY point_id ORDER BY valid_time RANGE BETWEEN INTERVAL {lo_s} SECOND PRECEDING AND {hi_sql})"
+    return f"""SELECT point_id, init_time, lead_min,
+        avg(r_t2m) OVER {w} AS bias14_t2m, stddev_samp(r_t2m) OVER {w} AS std14_t2m,
+        avg(r_gust) OVER {w} AS bias14_gust, stddev_samp(r_gust) OVER {w} AS std14_gust
+    FROM resid WHERE lead_min = {lead_min}"""
+
+
+def training_sql(leads: list[int]) -> str:
+    return _TRAINING_SQL.replace("{rolling}", "\n    UNION ALL\n    ".join(_rolling_sql(m) for m in sorted(leads)))
+
+
 def build_training(nwp: pa.Table, obs: pa.Table) -> pa.Table:
     con = duckdb.connect()
     con.register("nwp", nwp)
     con.register("obs", obs)
-    return con.sql(TRAINING_SQL).to_arrow_table().select(TRAINING_SCHEMA.column_names).cast(TRAINING_SCHEMA.as_arrow())
+    leads = pa.compute.unique(nwp["lead_min"]).to_pylist() or [0]
+    return (
+        con.sql(training_sql(leads))
+        .to_arrow_table()
+        .select(TRAINING_SCHEMA.column_names)
+        .cast(TRAINING_SCHEMA.as_arrow())
+    )
 
 
 def rebuild(station_ids: list[str]) -> int:
