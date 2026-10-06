@@ -2,12 +2,83 @@
 // Plain SVG, no dependencies. Labels go in via textContent only.
 
 const NS = "http://www.w3.org/2000/svg";
-const MODELS = {
-  gbm_residual: { label: "GBM residual", color: "var(--s1)" },
-  bias_rolling: { label: "Rolling bias", color: "var(--s2)" },
-  raw_hrrr: { label: "Raw HRRR", color: "var(--ref)" },
+
+// ---- models: colors follow the model, never its rank or what else is shown --------------
+
+// Fixed labels and color slots for models we know; any other model in data.json takes
+// the next free slot (--s1..--s8), in name order, so its color never changes when
+// models are hidden. raw_hrrr is the reference (gray), not a series.
+const KNOWN = {
+  raw_hrrr: { label: "Raw HRRR" },
+  gbm_residual: { label: "GBM residual", slot: 1 },
+  bias_rolling: { label: "Rolling bias", slot: 2 },
 };
-const CHALLENGERS = ["gbm_residual", "bias_rolling"];
+const MODELS = {};
+let ORDER = []; // every model in the data: raw_hrrr first, then by color slot
+const HIDDEN_KEY = "microcast.hiddenModels";
+let hidden = new Set();
+try { hidden = new Set(JSON.parse(localStorage.getItem(HIDDEN_KEY) || "[]")); } catch { /* private window */ }
+const saveHidden = () => { try { localStorage.setItem(HIDDEN_KEY, JSON.stringify([...hidden])); } catch { /* ignore */ } };
+
+function registerModels(data) {
+  const ids = [...new Set(data.leaderboard.map((r) => r.model))].sort();
+  const used = new Set(Object.values(KNOWN).map((m) => m.slot).filter(Boolean));
+  let next = 1;
+  for (const id of ids) {
+    const k = KNOWN[id] || {};
+    let slot = k.slot;
+    if (id !== "raw_hrrr" && !slot) {
+      while (used.has(next)) next++;
+      slot = next;
+      used.add(slot);
+    }
+    MODELS[id] = {
+      label: k.label || id.replaceAll("_", " "),
+      slot: slot || 0,
+      color: id === "raw_hrrr" ? "var(--ref)" : slot <= 8 ? `var(--s${slot})` : "var(--muted)",
+    };
+  }
+  ORDER = ids.sort((a, b) => MODELS[a].slot - MODELS[b].slot);
+}
+const shown = (k) => !hidden.has(k);
+const challengers = () => ORDER.filter((k) => k !== "raw_hrrr" && shown(k));
+const withRaw = () => ORDER.filter(shown); // raw HRRR as a series (error charts, PIT)
+
+// Dim every model mark except k inside scope (the whole page by default); null clears.
+function focusModel(k, scope = document) {
+  for (const e of scope.querySelectorAll("[data-model]")) e.classList.toggle("dim", !!k && e.dataset.model !== k);
+}
+
+// One row of toggles above the charts: click to show/hide a model everywhere, hover to
+// highlight it everywhere. The choice is remembered in this browser.
+function modelPicker(root, onChange) {
+  const bar = el("div", { class: "picker", role: "group", "aria-label": "Models shown" }, root);
+  el("span", { class: "picker-label", text: "Models" }, bar);
+  const chips = [];
+  for (const k of ORDER) {
+    const b = el("button", { type: "button", class: "chip", "aria-pressed": String(shown(k)) }, bar);
+    el("span", { class: "key", style: `background:${MODELS[k].color}` }, b);
+    b.appendChild(document.createTextNode(MODELS[k].label));
+    chips.push([k, b]);
+    b.addEventListener("click", () => {
+      hidden.has(k) ? hidden.delete(k) : hidden.add(k);
+      b.setAttribute("aria-pressed", String(shown(k)));
+      saveHidden();
+      onChange();
+    });
+    for (const [on, off] of [["pointerenter", "pointerleave"], ["focus", "blur"]]) {
+      b.addEventListener(on, () => shown(k) && focusModel(k));
+      b.addEventListener(off, () => focusModel(null));
+    }
+  }
+  const all = el("button", { type: "button", class: "chip ghost", text: "Show all" }, bar);
+  all.addEventListener("click", () => {
+    hidden.clear();
+    for (const [, b] of chips) b.setAttribute("aria-pressed", "true");
+    saveHidden();
+    onChange();
+  });
+}
 
 const el = (tag, attrs = {}, parent) => {
   const e = tag === "svg" || ["g", "line", "path", "circle", "rect", "text"].includes(tag)
@@ -37,7 +108,7 @@ function showTip(evt, title, rows) {
   tip.replaceChildren();
   el("div", { class: "t", text: title }, tip);
   for (const r of rows) {
-    const row = el("div", { class: "row" }, tip);
+    const row = el("div", { class: `row${r.on ? " on" : ""}` }, tip);
     if (r.color) el("span", { class: "k", style: `background:${r.color}` }, row);
     el("b", { text: r.value }, row);
     el("span", { class: "n", text: r.name }, row);
@@ -72,7 +143,12 @@ function frame(parent, { title, w = 480, h = 240, m = { t: 12, r: 64, b: 28, l: 
 
 function legendFor(legend, keys, swatch = false) {
   for (const k of keys) {
-    const item = el("span", {}, legend);
+    const item = el("span", MODELS[k] ? { "data-model": k, class: "item" } : {}, legend);
+    if (MODELS[k]) {
+      const card = legend.closest(".card");
+      item.addEventListener("pointerenter", () => focusModel(k, card));
+      item.addEventListener("pointerleave", () => focusModel(null, card));
+    }
     el("span", { class: `key${swatch ? " sw" : ""}`, style: `background:${MODELS[k]?.color || k.color}` }, item);
     item.appendChild(document.createTextNode(MODELS[k]?.label || k.label));
   }
@@ -102,7 +178,14 @@ function tableView(card, headers, rows) {
 
 // ---- line chart: x positions are categories (months, lead hours, local hours) -------------
 
+function emptyCard(parent, title) {
+  const card = el("div", { class: "card chart" }, parent);
+  el("h3", { text: title }, card);
+  el("p", { class: "sub", text: "No models selected. Use the Models toggles above." }, card);
+}
+
 function lineChart(parent, { title, xs, xLabel, series, yFormat, zeroLabel, tipFormat, every = 1 }) {
+  if (!series.length) return emptyCard(parent, title);
   const f = frame(parent, { title });
   legendFor(f.legend, series.map((s) => s.key));
   const vals = series.flatMap((s) => s.values).filter((v) => v != null);
@@ -132,18 +215,19 @@ function lineChart(parent, { title, xs, xLabel, series, yFormat, zeroLabel, tipF
       if (v == null) return;
       d += `${d && s.values[i - 1] != null ? "L" : "M"}${x(i)},${y(v)}`;
     });
-    el("path", { d, fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }, f.svg);
+    el("path", { d, fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round", "data-model": s.key }, f.svg);
     const last = s.values.findLastIndex((v) => v != null);
     if (last >= 0) {
-      el("circle", { cx: x(last), cy: y(s.values[last]), r: 4, fill: color, stroke: "var(--surface)", "stroke-width": 2 }, f.svg);
-      ends.push({ x: x(last) + 8, y: y(s.values[last]) + 4, text: MODELS[s.key].label });
+      el("circle", { cx: x(last), cy: y(s.values[last]), r: 4, fill: color, stroke: "var(--surface)", "stroke-width": 2, "data-model": s.key }, f.svg);
+      ends.push({ x: x(last) + 8, y: y(s.values[last]) + 4, text: MODELS[s.key].label, key: s.key });
     }
   }
-  // Direct end labels, nudged apart so they never overlap (<= 4 series only).
+  // Direct end labels, nudged apart so they never overlap (<= 4 series only; beyond
+  // that the legend and the hover highlight carry the names).
   if (series.length <= 4) {
     ends.sort((a, b) => a.y - b.y);
     for (let i = 1; i < ends.length; i++) ends[i].y = Math.max(ends[i].y, ends[i - 1].y + 13);
-    for (const e of ends) el("text", { class: "direct", x: e.x, y: e.y, text: e.text }, f.svg);
+    for (const e of ends) el("text", { class: "direct", x: e.x, y: e.y, text: e.text, "data-model": e.key }, f.svg);
   }
   // crosshair + one tooltip listing every series at that x
   const cross = el("line", { class: "crosshair", y1: f.m.t, y2: f.m.t + f.ih, visibility: "hidden" }, f.svg);
@@ -154,11 +238,16 @@ function lineChart(parent, { title, xs, xLabel, series, yFormat, zeroLabel, tipF
     const p = pt.matrixTransform(f.svg.getScreenCTM().inverse());
     const i = Math.max(0, Math.min(xs.length - 1, Math.round(((p.x - f.m.l) / f.iw) * (xs.length - 1))));
     cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
-    showTip(e, `${xs[i]}${xLabel ? " " + xLabel : ""}`, series.map((s) => ({
-      color: MODELS[s.key].color, name: MODELS[s.key].label, value: (tipFormat || yFormat)(s.values[i]),
+    // The series nearest the pointer is highlighted in the chart and in the tooltip.
+    const near = series.filter((s) => s.values[i] != null)
+      .reduce((best, s) => (!best || Math.abs(y(s.values[i]) - p.y) < Math.abs(y(best.values[i]) - p.y) ? s : best), null);
+    if (series.length > 1) focusModel(near?.key, f.card);
+    const rows = [...series].sort((a, b) => (b.values[i] ?? -Infinity) - (a.values[i] ?? -Infinity));
+    showTip(e, `${xs[i]}${xLabel ? " " + xLabel : ""}`, rows.map((s) => ({
+      color: MODELS[s.key].color, name: MODELS[s.key].label, value: (tipFormat || yFormat)(s.values[i]), on: s === near && series.length > 1,
     })));
   });
-  hit.addEventListener("pointerleave", () => { cross.setAttribute("visibility", "hidden"); hideTip(); });
+  hit.addEventListener("pointerleave", () => { cross.setAttribute("visibility", "hidden"); hideTip(); focusModel(null, f.card); });
   tableView(f.card, [xLabel || "x", ...series.map((s) => MODELS[s.key].label)],
     xs.map((xv, i) => [String(xv), ...series.map((s) => (tipFormat || yFormat)(s.values[i]))]));
   return f;
@@ -167,7 +256,8 @@ function lineChart(parent, { title, xs, xLabel, series, yFormat, zeroLabel, tipF
 // ---- dot + 95% CI whisker, one row per category -----------------------------------------
 
 function dotChart(parent, { title, rows, keys, format }) {
-  const rowH = 30;
+  if (!keys.length) return emptyCard(parent, title);
+  const rowH = Math.max(30, keys.length * 9 + 12);
   const f = frame(parent, { title, h: rows.length * rowH + 40, m: { t: 8, r: 24, b: 28, l: 72 } });
   legendFor(f.legend, keys);
   const vals = rows.flatMap((r) => keys.flatMap((k) => [r[k]?.lo, r[k]?.hi, r[k]?.v])).filter((v) => v != null);
@@ -189,11 +279,11 @@ function dotChart(parent, { title, rows, keys, format }) {
       if (!d) return;
       const yy = yc + (j - (keys.length - 1) / 2) * 9;
       const color = MODELS[k].color;
-      el("line", { x1: x(d.lo), x2: x(d.hi), y1: yy, y2: yy, stroke: color, "stroke-width": 2, "stroke-linecap": "round" }, f.svg);
-      const c = el("circle", { cx: x(d.v), cy: yy, r: 4.5, fill: color, stroke: "var(--surface)", "stroke-width": 2, tabindex: 0 }, f.svg);
-      const show = (e) => showTip(e, r.label, [{ color, name: MODELS[k].label, value: `${format(d.v)} [${format(d.lo)}, ${format(d.hi)}]` }]);
+      el("line", { x1: x(d.lo), x2: x(d.hi), y1: yy, y2: yy, stroke: color, "stroke-width": 2, "stroke-linecap": "round", "data-model": k }, f.svg);
+      const c = el("circle", { cx: x(d.v), cy: yy, r: 4.5, fill: color, stroke: "var(--surface)", "stroke-width": 2, tabindex: 0, "data-model": k }, f.svg);
+      const show = (e) => { focusModel(k, f.card); showTip(e, r.label, [{ color, name: MODELS[k].label, value: `${format(d.v)} [${format(d.lo)}, ${format(d.hi)}]` }]); };
       c.addEventListener("pointermove", show);
-      c.addEventListener("pointerleave", hideTip);
+      c.addEventListener("pointerleave", () => { hideTip(); focusModel(null, f.card); });
     });
   });
   tableView(f.card, ["", ...keys.flatMap((k) => [MODELS[k].label, "95% CI"])],
@@ -202,8 +292,9 @@ function dotChart(parent, { title, rows, keys, format }) {
 
 // ---- bars (PIT histogram) -----------------------------------------------------------
 
-function barChart(parent, { title, labels, values, color, refValue, refLabel, format }) {
+function barChart(parent, { title, labels, values, color, refValue, refLabel, format, model }) {
   const f = frame(parent, { title, h: 180, m: { t: 8, r: 56, b: 28, l: 40 } });
+  if (model) f.card.dataset.model = model;
   const hi = Math.max(...values, refValue || 0) * 1.15;
   const ticks = niceTicks(0, hi, 3);
   const top = Math.max(hi, ticks.at(-1));
@@ -286,10 +377,10 @@ function leaderboardTable(root, data) {
   const tr = el("tr", {}, el("thead", {}, t));
   head.forEach((h, i) => el("th", { text: h, class: i > 2 ? "num" : "" }, tr));
   const tb = el("tbody", {}, t);
-  const rows = data.leaderboard.filter((r) => r.point === "all")
+  const rows = data.leaderboard.filter((r) => r.point === "all" && shown(r.model))
     .sort((a, b) => a.variable.localeCompare(b.variable) || a.lead.localeCompare(b.lead) || b.skill - a.skill);
   for (const r of rows) {
-    const row = el("tr", {}, tb);
+    const row = el("tr", { "data-model": r.model }, tb);
     const unit = data.targets[r.variable].unit;
     [data.targets[r.variable].label, r.lead, MODELS[r.model].label, `${fmt(r.crps)} ${unit}`, fmt(r.mae), fmt(r.bias),
       pct(r.coverage_80), r.model === "raw_hrrr" ? "baseline" : signedPct(r.skill),
@@ -306,7 +397,7 @@ function monthlyCharts(root, data) {
     lineChart(grid, {
       title: `${data.targets[v].label}: skill vs raw HRRR by month`,
       xs: xs.map((m) => m.slice(2)), every: 2,
-      series: CHALLENGERS.map((k) => ({ key: k, values: xs.map((m) => rows.find((r) => r.model === k && r.month === m)?.skill ?? null) })),
+      series: challengers().map((k) => ({ key: k, values: xs.map((m) => rows.find((r) => r.model === k && r.month === m)?.skill ?? null) })),
       yFormat: (t) => `${Math.round(100 * t)}%`, tipFormat: signedPct, zeroLabel: "raw HRRR",
     });
   }
@@ -338,18 +429,32 @@ function freshnessTables(root, data) {
   }
 }
 
+// Clear a section and return it, for re-rendering after the model selection changes.
+const section = (id) => { const e = document.getElementById(id); e.replaceChildren(); return e; };
+
 function renderIndex(data) {
   gateTiles(document.getElementById("gate"), data);
-  leaderboardTable(document.getElementById("leaderboard"), data);
-  monthlyCharts(document.getElementById("monthly"), data);
+  const draw = () => {
+    leaderboardTable(section("leaderboard"), data);
+    monthlyCharts(section("monthly"), data);
+  };
+  modelPicker(document.getElementById("models"), draw);
+  draw();
   freshnessTables(document.getElementById("freshness"), data);
 }
 
 function renderAnalytics(data) {
+  modelPicker(document.getElementById("models"), () => renderModelSections(data));
+  renderModelSections(data);
+  rawBiasHeatmap(data);
+}
+
+function renderModelSections(data) {
   const A = data.analytics;
   const targets = Object.keys(data.targets);
+  const CHALLENGERS = challengers();
 
-  const byLead = el("div", { class: "multiples" }, document.getElementById("by-lead"));
+  const byLead = el("div", { class: "multiples" }, section("by-lead"));
   for (const v of targets) {
     const rows = A.by_lead.filter((r) => r.variable === v);
     const xs = [...new Set(rows.map((r) => r.lead_h))].sort((a, b) => a - b);
@@ -360,7 +465,7 @@ function renderAnalytics(data) {
     });
   }
 
-  const byStation = el("div", { class: "multiples wide" }, document.getElementById("by-station"));
+  const byStation = el("div", { class: "multiples wide" }, section("by-station"));
   for (const v of targets) {
     for (const lead of ["1-3 h", "4-6 h"]) {
       const rows = data.stations.map((s) => {
@@ -371,35 +476,39 @@ function renderAnalytics(data) {
         }
         return out;
       }).filter((r) => CHALLENGERS.some((k) => r[k]));
-      if (rows.length) dotChart(byStation, { title: `${data.targets[v].label}, ${lead}: skill by station`, rows, keys: CHALLENGERS, format: (t) => `${Math.round(100 * t)}%` });
+      if (rows.length || !CHALLENGERS.length) dotChart(byStation, { title: `${data.targets[v].label}, ${lead}: skill by station`, rows, keys: CHALLENGERS, format: (t) => `${Math.round(100 * t)}%` });
     }
   }
 
-  const byHour = el("div", { class: "multiples" }, document.getElementById("by-hour"));
+  const byHour = el("div", { class: "multiples" }, section("by-hour"));
   for (const v of targets) {
     const rows = A.by_hour.filter((r) => r.variable === v);
     const xs = [...Array(24).keys()];
     lineChart(byHour, {
       title: `${data.targets[v].label}: mean absolute error by hour (PT)`, xs, xLabel: "h", every: 3,
-      series: ["raw_hrrr", ...CHALLENGERS].map((k) => ({ key: k, values: xs.map((h) => rows.find((r) => r.model === k && r.local_hour === h)?.mae ?? null) })),
+      series: withRaw().map((k) => ({ key: k, values: xs.map((h) => rows.find((r) => r.model === k && r.local_hour === h)?.mae ?? null) })),
       yFormat: (t) => fmt(t, 1), tipFormat: (t) => `${fmt(t)} ${data.targets[v].unit}`,
     });
   }
 
-  const pit = el("div", { class: "multiples" }, document.getElementById("pit"));
+  const pit = el("div", { class: "multiples" }, section("pit"));
   for (const v of targets) {
-    for (const k of ["raw_hrrr", ...CHALLENGERS]) {
+    for (const k of withRaw()) {
       const rows = A.pit.filter((r) => r.variable === v && r.model === k);
       const total = rows.reduce((a, r) => a + r.n, 0);
       if (!total) continue;
       const values = [...Array(10).keys()].map((b) => (rows.find((r) => r.bin === b)?.n || 0) / total);
       barChart(pit, {
         title: `${data.targets[v].label} · ${MODELS[k].label}`, labels: [...Array(10).keys()].map((b) => `${b / 10}–${(b + 1) / 10}`),
-        values, color: MODELS[k].color, refValue: 0.1, refLabel: "calibrated", format: (t) => pct(t),
+        values, color: MODELS[k].color, refValue: 0.1, refLabel: "calibrated", format: (t) => pct(t), model: k,
       });
     }
   }
+}
 
+function rawBiasHeatmap(data) {
+  const A = data.analytics;
+  const targets = Object.keys(data.targets);
   const hm = document.getElementById("raw-bias");
   const controls = el("div", { class: "controls" }, hm);
   const lab = el("label", { text: "Station " }, controls);
@@ -437,6 +546,7 @@ function footer(data) {
 fetch("data.json")
   .then((r) => r.json())
   .then((data) => {
+    registerModels(data);
     (document.body.dataset.page === "analytics" ? renderAnalytics : renderIndex)(data);
     footer(data);
   })

@@ -10,6 +10,12 @@
   --ring: rgba(11, 11, 11, 0.1);
   --s1: #2a78d6; /* gbm_residual */
   --s2: #eb6834; /* bias_rolling */
+  --s3: #1baf7a;
+  --s4: #eda100;
+  --s5: #e87ba4;
+  --s6: #008300;
+  --s7: #4a3aa7;
+  --s8: #e34948;
   --ref: #898781; /* raw_hrrr: the reference, not a series */
   --div-cold: #2a78d6;
   --div-mid: #f0efec;
@@ -31,6 +37,11 @@
     --ring: rgba(255, 255, 255, 0.1);
     --s1: #3987e5;
     --s2: #d95926;
+    --s3: #199e70;
+    --s4: #c98500;
+    --s5: #d55181;
+    --s7: #9085e9;
+    --s8: #e66767;
     --div-cold: #3987e5;
     --div-mid: #383835;
     --div-warm: #e66767;
@@ -48,6 +59,11 @@
   --ring: rgba(255, 255, 255, 0.1);
   --s1: #3987e5;
   --s2: #d95926;
+  --s3: #199e70;
+  --s4: #c98500;
+  --s5: #d55181;
+  --s7: #9085e9;
+  --s8: #e66767;
   --div-cold: #3987e5;
   --div-mid: #383835;
   --div-warm: #e66767;
@@ -116,3 +132,25 @@ select { font: inherit; padding: 4px 8px; border-radius: 6px; border: 1px solid 
 .controls { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; font-size: 13px; color: var(--ink-2); }
 footer { margin-top: 48px; color: var(--muted); font-size: 12px; }
 code { font-size: 12px; }
+
+/* model picker: one row above the charts, stays in reach while scrolling */
+.picker {
+  position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 10px 0; margin: 8px 0 0; background: var(--page); border-bottom: 1px solid var(--grid);
+}
+.picker-label { color: var(--ink-2); font-size: 13px; margin-right: 4px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 13px; cursor: pointer;
+  padding: 4px 10px; border-radius: 999px; border: 1px solid var(--ring); background: var(--surface); color: var(--ink);
+}
+.chip .key { width: 14px; height: 2px; border-radius: 1px; }
+.chip[aria-pressed="false"] { color: var(--muted); background: transparent; }
+.chip[aria-pressed="false"] .key { background: var(--axis) !important; }
+.chip.ghost { color: var(--ink-2); background: transparent; }
+.chip:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+.legend .item { cursor: default; }
+/* hover highlight: everything but the focused model recedes */
+[data-model] { transition: opacity 120ms; }
+[data-model].dim { opacity: 0.15; }
+tr[data-model].dim, .legend [data-model].dim { opacity: 0.35; }
+.tip .row.on b, .tip .row.on span.n { color: var(--ink); font-weight: 600; }
