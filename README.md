@@ -32,10 +32,11 @@ built yet. As of 2026-10-05:
 - Three models behind one interface: raw HRRR, a rolling-bias correction, and
   a LightGBM residual model.
 - Backtests on rolling monthly folds with CRPS skill and bootstrap CIs, logged
-  to MLflow (SQLite file). **The phase 1 gate is passed:** the GBM residual
-  beats raw HRRR at 0–6 h by about 31–42% for temperature and 21–25% for
-  gust on hourly cycles
-  ([results](docs/specs/phase-1.md#results-on-hourly-cycles-2026-10-05-evening)).
+  to MLflow (SQLite file). **The phase 1 gate is passed:** at the four original stations
+  the GBM residual beats raw HRRR at 0–6 h by about 30–43% for temperature
+  and 27–30% for gust, and it now trains and scores at 36 stations including
+  the Castro and Golden Gate Park
+  ([results](docs/specs/phase-1.md#results-with-the-network-stations-2026-10-06)).
 - A static status site (Status and Analytics pages) built from the lake; it
   runs locally, not hosted yet.
 
@@ -53,9 +54,10 @@ built yet. As of 2026-10-05:
 | PurpleAir, own sensor | PM2.5 on both laser channels, sensor temperature, humidity, pressure | The outdoor PA-II at the house | `microcast ingest purpleair` (home network, free) | Works; run by hand |
 | PurpleAir, public transect | Hourly sensor temperature | 10 public sensors, Ocean Beach → Sunset → Twin Peaks → Castro, 2025-04 → now | `microcast backfill purpleair` (paid API points) | Loaded (~115k rows; ~237k API points) |
 
-Only the four original truth stations (SFOC1, KSFO, KOAK, FTPC1) feed the
-backtest today. The Synoptic, MADIS and PurpleAir stations
-are in the lake but not yet in the models.
+The backtest trains and scores at 36 stations: the four original truth
+stations (SFOC1, KSFO, KOAK, FTPC1) plus the MADIS network, which includes
+the Synoptic stations. The PurpleAir sensors are in the lake but not yet used
+by any model.
 
 **Planned, not built**
 
@@ -64,9 +66,8 @@ are in the lake but not yet in the models.
   ([D12](docs/decisions.md#d12--dagster-on-k3s-runs-the-collectors-not-cronjobs)).
   Until then, every collector is run by hand.
 - MinIO/S3 storage and the Lakekeeper REST catalog.
-- HRRR at the Synoptic, MADIS and PurpleAir stations, so they can enter
-  backtests; using the PurpleAir transect as model features; hourly live
-  PurpleAir polling (D10).
+- Using the PurpleAir transect as model inputs (a "with vs. without" model
+  pair to judge it), and hourly live PurpleAir polling (D10).
 - A backyard weather station at the house (D5).
 - Hosting the status site at weather.henry.st (D8).
 - Live inference, the forecast panel on the site, and plain-language alerts

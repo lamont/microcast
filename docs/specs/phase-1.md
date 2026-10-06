@@ -85,9 +85,8 @@ Then, in order:
    `backfill hrrr --points network --tag net1`: 42 points, 13,141 cycles
    (125 missing from the archive), 200.9M rows (bronze.nwp_point 184 →
    705 MB). The Bay Area window is kept for every cycle: 2.4 GB under
-   `data/hrrr/window/` (D10). Next: add those stations to gold so the
-   Castro/park stations enter the backtest. The MADIS history means they
-   don't have to wait for accrual.
+   `data/hrrr/window/` (D10). **The stations are in gold and the backtest**
+   (2026-10-06 01:44): see "Results with the network stations" below.
 3. PurpleAir: discovery done, budget agreed (250k points). Nine transect
    sensors, now ten (Ocean Beach → Castro, `kind: purpleair_network` in
    `config/places.yaml`) are pulled as hourly temperature, 2025-04 → now, by
@@ -122,6 +121,43 @@ Then, in order:
 
 Docker Compose (skipped, D12), MinIO/Lakekeeper, RRFS/REFS ingest, alerts.
 Dagster moves into phase 1 as the scheduler (D12).
+
+## Results with the network stations (2026-10-06)
+
+Gold now trains and scores at 36 truth stations: the four original ones plus
+the MADIS network (Castro and Corona Heights CWOP, 604PG in Golden Gate Park,
+PG&E, the Presidio and Marin headlands, harbor stations). PurpleAir stays out
+as truth. 3,308,368 training examples, 16 monthly folds, ~0.9M scored
+forecasts per target and lead bucket. Gold snapshot `4331126739293301442`.
+The rebuild took 14 minutes end to end (silver 78 s, gold 11 s after the
+rolling-bias window rewrite, backtest 12 min).
+
+**The original four, now trained alongside the network** (the gate's group):
+
+| Target | Lead | GBM skill, 4 stations only | **GBM skill, trained on 36** [95% CI] |
+| --- | --- | --- | --- |
+| Temperature | 1–3 h | +42.0% | **+42.5%** [+41.5, +43.7] |
+| Temperature | 4–6 h | +30.7% | **+29.8%** [+28.5, +31.1] |
+| Gust | 1–3 h | +24.8% | **+30.4%** [+29.0, +31.7] |
+| Gust | 4–6 h | +21.2% | **+26.5%** [+24.9, +27.9] |
+
+Training on the network made the original stations' **gust** forecasts about
+5 points better; temperature is unchanged within the CIs.
+
+**All 36 stations pooled:** temperature +48.5% / +35.5%, gust +55.3% /
++51.9% (1–3 h / 4–6 h). The GBM beats raw HRRR in every month (weakest +31%).
+
+- Castro and park stations, temperature 1–3 h: F2543 +41%, 604PG +43%, E9227
+  +45%, SFOC1 +46%, F4637 +48%, C5988 +54%, F6803 +58%.
+- **Read the pooled gust number with care.** Raw HRRR's gust is too high by a
+  median 1.5 m/s across the stations and by up to 6.3 m/s at sheltered
+  backyard CWOP sites (D10: CWOP wind is local exposure). Much of the GBM's
+  gust skill there is learning each site's shelter, which is real for that
+  sensor but isn't weather skill. 604PG (open park, +72%) and the original four
+  are the honest gust numbers.
+- GGBC1 (Golden Gate Bridge) shows −9% temperature skill on only 3 scored rows
+  with 26 °C errors: bad observations that pass the range check. To do: a
+  per-station sanity check in silver.
 
 ## Results on hourly cycles (2026-10-05, evening)
 
