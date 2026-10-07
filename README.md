@@ -29,15 +29,26 @@ built yet. As of 2026-10-06:
 - A local Iceberg lake (PyIceberg with a SQLite catalog, Parquet files under
   `./data`) with bronze, silver and gold layers, queried through DuckDB.
 - Ingest from nine working data sources (table below) into the lake's bronze layer.
-- Four models behind one interface: raw HRRR, a rolling-bias correction, a
-  LightGBM residual model, and the same LightGBM with the PurpleAir transect
-  as extra inputs (1–2% better on temperature, no help on gust).
+- Terrain features for every point (USGS 3DEP 10 m elevation, HRRR's own
+  terrain height, slope, shelter, fetch from the water) in
+  `silver.static_features`.
+- Seven models behind one interface: raw HRRR, a rolling-bias correction, a
+  LightGBM residual model, the same LightGBM with the PurpleAir transect
+  (1–2% better on temperature, no help on gust), with terrain in place of the
+  station id (as good on known stations, 4–5 points better on unseen ones),
+  and two HRRR-only variants for places with no station of their own.
 - Backtests on rolling monthly folds with CRPS skill and bootstrap CIs, logged
   to MLflow (SQLite file). **The phase 1 gate is passed:** at the four original stations
   the GBM residual beats raw HRRR at 0–6 h by about 30–43% for temperature
   and 27–30% for gust, and it now trains and scores at 36 stations including
   the Castro and Golden Gate Park
   ([results](docs/specs/phase-1.md#results-with-the-network-stations-2026-10-06)).
+- Leave-stations-out backtests (`microcast backtest --holdout`): how the
+  models do at a station they never trained on
+  ([results](docs/specs/phase-1.md#terrain-and-leave-stations-out-2026-10-06-evening)).
+- A first look at crosswind gust on the Golden Gate Bridge from GGBC1, the
+  station mid-span (its mirrored wind vane is corrected in silver)
+  ([results](docs/specs/phase-1.md#golden-gate-bridge-crosswind-2026-10-06-evening)).
 - A static status site (Status and Analytics pages) built from the lake; it
   runs locally, not hosted yet.
 
@@ -97,7 +108,9 @@ uv run microcast backfill hrrr --start 2025-04-01 --end 2026-10-01   # hourly cy
 uv run microcast backfill madis --start 2025-04-01 --end 2026-10-01  # network stations' history
 uv run microcast backfill hrrr --start 2025-04-01 --end 2026-10-01 --points network --tag net1
 uv run microcast build silver && uv run microcast build gold        # gold: 36 truth stations
+uv run microcast build static                             # terrain per point (fetches 3DEP once)
 uv run microcast backtest                                 # -> gold.scores, MLflow, data/reports/
+uv run microcast backtest --holdout --models gbm_residual,gbm_terrain,gbm_nwp,gbm_nwp_terrain  # leave stations out
 uv run microcast compare                                  # leaderboard vs raw HRRR
 uv run microcast site --out site                          # static pages for weather.henry.st
 python -m http.server -d site 8000
@@ -130,9 +143,12 @@ src/microcast/
   ingest/purpleair.py  own PurpleAir sensor (LAN or API), public transect history
   ingest/synoptic.py   Synoptic/CWOP stations (last 7 days, accrues)
   ingest/madis.py  MADIS mesonet history (CWOP, PG&E stations), streamed hourly
+  ingest/dem.py    USGS 3DEP elevation over the HRRR window, 10 m, cached
   lake/copy.py     copy bronze to another catalog (laptop -> cluster)
-  transform/       bronze → silver → gold (DuckDB SQL); network.py: PurpleAir transect features
-  models/          Forecaster zoo: raw_hrrr, bias_rolling, gbm_residual, gbm_purpleair
+  transform/       bronze → silver → gold (DuckDB SQL); network.py: PurpleAir transect features;
+                   static.py: terrain features per point
+  models/          Forecaster zoo: raw_hrrr, bias_rolling, gbm_residual, gbm_purpleair,
+                   gbm_terrain, gbm_nwp, gbm_nwp_terrain
   backtest/        folds, CRPS, skill + bootstrap CI, leaderboard
   pipeline.py      backtest orchestration + MLflow
   site/            static status site (weather.henry.st)
@@ -158,6 +174,7 @@ git-ignored. The status site shows station and place ids and scores only.
 | CI | Confidence interval (here, from a bootstrap: resampling the scores many times) |
 | CRPS | Continuous Ranked Probability Score: error of a probabilistic forecast, in the variable's units; lower is better |
 | CWOP | Citizen Weather Observer Program: volunteer home weather stations |
+| DEM | Digital Elevation Model: a grid of ground heights (here USGS 3DEP) |
 | DSWRF | Downward Short-Wave Radiation Flux: sunlight reaching the ground, in W/m² |
 | GBM | Gradient-Boosted Machine: an ensemble of decision trees (here LightGBM) |
 | GFS | Global Forecast System: NOAA's global weather model |
@@ -205,6 +222,7 @@ git-ignored. The status site shows station and place ids and scores only.
 | PyIceberg | The Python library for reading and writing Iceberg tables |
 | Residual model | A model that predicts HRRR's error at a station, then adds it back to HRRR's forecast |
 | SQLite | A single-file SQL database; holds the local Iceberg catalog and MLflow runs |
+| Shelter index | Winstral's Sx: the steepest horizon angle upwind of a point; positive means sheltered from that wind |
 | Synoptic | Synoptic Data: a company aggregating weather stations (CWOP, PG&E, …) behind an API |
 | Zarr | A chunked array format for cloud storage |
 
@@ -215,6 +233,7 @@ git-ignored. The status site shows station and place ids and scores only.
 | SFOC1 | SF Downtown at the Mint (NOAA HADS), ~1 km from the house; hourly temperature |
 | KSFO / KOAK | San Francisco and Oakland airport ASOS stations |
 | FTPC1 | Fort Point at the Golden Gate (NDBC) |
+| GGBC1 | Golden Gate Bridge, mid-span at deck height (MesoWest via MADIS); wind only, its vane reads mirrored |
 | 604PG | PG&E station at the west end of JFK Drive, Golden Gate Park |
 | C5988, F6803, E9227, F2543, F4637 | CWOP home weather stations around the Castro and Corona Heights |
 | pa_<index> | A public PurpleAir sensor on the transect, by its PurpleAir sensor number |

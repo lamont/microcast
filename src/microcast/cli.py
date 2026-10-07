@@ -342,14 +342,40 @@ def build_gold(
     typer.echo(f"gold.network_features: {network.rebuild(transect)} rows from {len(transect)} PurpleAir sensors")
 
 
+@build_app.command("static")
+def build_static() -> None:
+    """Terrain features (3DEP, HRRR terrain) for every registry point and station -> silver.static_features."""
+    import pandas as pd
+
+    from microcast.lake.catalog import get_catalog, init_lake
+    from microcast.transform import static
+
+    init_lake()
+    vps = registry_mod.load().virtual_points()
+    st = get_catalog().load_table("bronze.stations").scan().to_pandas()
+    st = st.sort_values("ingested_at").groupby("station_id", as_index=False).last()
+    points = pd.concat(
+        [
+            pd.DataFrame([(v.point_id, v.lat, v.lon) for v in vps], columns=["point_id", "lat", "lon"]),
+            st.rename(columns={"station_id": "point_id"})[["point_id", "lat", "lon"]],
+        ]
+    )  # registry first: its coordinates win for stations in both
+    out = static.rebuild(points)
+    typer.echo(f"silver.static_features: {len(out)} points x {len(static.FEATURES)} features")
+
+
 @app.command("backtest")
 def backtest_cmd(
     models: str = typer.Option("raw_hrrr,bias_rolling,gbm_residual,gbm_purpleair", help="Comma-separated model names"),
     targets: str = typer.Option("t2m,gust", help="Comma-separated targets"),
+    holdout: bool = typer.Option(False, help="Leave stations out instead (data/reports/holdout/ only)"),
 ) -> None:
     """Rolling monthly backtests -> gold.forecasts, gold.scores, MLflow, data/reports/."""
-    from microcast.pipeline import run_backtests
+    from microcast.pipeline import run_backtests, run_holdout
 
+    if holdout:
+        _print_board(run_holdout(models.split(","), targets.split(","), log=typer.echo))
+        return
     board, _ = run_backtests(models.split(","), targets.split(","), log=typer.echo)
     _print_board(board)
 

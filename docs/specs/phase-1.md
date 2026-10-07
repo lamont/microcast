@@ -86,30 +86,154 @@ Done this session (details in the Results sections below):
   +43% / +30%, gust +30% / +27%).
 - **Site:** a model picker and hover highlighting, ready for more models.
 
+Evening session (2026-10-06):
+
+- **Terrain:** `microcast build static` → `silver.static_features`, 14
+  features at 69 points from a cached 10 m 3DEP grid (`data/terrain/`, 93 MB).
+- **Models:** `gbm_terrain`, `gbm_nwp`, `gbm_nwp_terrain`; leave-stations-out
+  backtests with `backtest --holdout` (results in `data/reports/holdout/`).
+  The rolling backtest was rerun with `gbm_terrain` (gold.scores and
+  `data/reports/` are from it).
+- **Bridge:** GGBC1's mirrored vane and stuck temperature fixed in silver;
+  silver and gold rebuilt after the backtests (gold snapshot
+  `4374202609169898617`, 3,318,346 rows; GGBC1 now has no temperature rows).
+  The crosswind work is exploratory: its numbers are in the bridge section
+  below, the scripts were not kept.
+
 ## Next
 
 1. Synoptic: `microcast ingest synoptic` at least weekly (the free tier keeps
    7 days; the trial ends ~2026-10-19, then check what the account becomes).
-2. Data quality: a per-station sanity check in silver (GGBC1 reported
-   temperatures ~26 °C off that passed the range check).
-3. Live inference, first cut: the newest HRRR run (live GRIB) through the
-   trained GBMs for the house, the Castro stations and the ride. HRRR's raw
-   wind is far too high inside Golden Gate Park (604PG sees ~22% of it on
-   afternoons), so the ride needs a corrected wind, not raw HRRR.
-4. Dagster on the laptop (`dagster dev`), when picked back up: the ingest,
+2. Neighbour obs as features: for a point with no station of its own, the
+   nearest stations' last obs and HRRR error at init (as-of, like the
+   station's own). Leave-stations-out showed a point's own obs carry most of
+   the skill and terrain alone recovers little of it; this is what the house
+   (until the backyard station) and the ride need. Score it with
+   `backtest --holdout` against `gbm_nwp_terrain`.
+3. Bridge crosswind gust in gold: a `xgust` target at GGBC1 (gust ×
+   |sin(direction − 354.7°)|, from the corrected vane), HRRR's crosswind
+   gust and along-bridge wind as features, and a "crosswind gust > 9 m/s"
+   probability. Then a `gg_bridge` route whose points use GGBC1's forecast.
+4. Live inference, first cut: the newest HRRR run (live GRIB) through
+   `gbm_terrain` for the house, the Castro stations, the ride and the bridge.
+   HRRR's raw wind is far too high inside Golden Gate Park (604PG sees ~22%
+   of it on afternoons), so the ride needs a corrected wind, not raw HRRR.
+5. Data quality, the general version: a per-station check against
+   neighbours and HRRR that would have caught GGBC1 (stuck values, mirrored
+   or rotated vanes) without a hand-kept list.
+6. Dagster on the laptop (`dagster dev`), when picked back up: the ingest,
    backfill and build commands as partitioned assets with schedules and
    per-table concurrency pools, declared in `defs.yaml` where possible (D12);
    then Postgres and the `dagster/dagster` Helm chart on the swarm cluster.
-5. A leaner PurpleAir feature set (the two transect summaries only) against
+7. A leaner PurpleAir feature set (the two transect summaries only) against
    the 32-feature version.
-6. Backyard station (D5); confirm the model first.
-7. First look at `lcc` and DSWRF vs the CWOP solar sensors for D2.
-8. Status site on k3s, internal at weather.henry.st (D8).
+8. Backyard station (D5); confirm the model first.
+9. First look at `lcc` and DSWRF vs the CWOP solar sensors for D2.
+10. Status site on k3s, internal at weather.henry.st (D8).
 
 ## Not in phase 1
 
 Docker Compose (skipped, D12), MinIO/Lakekeeper, RRFS/REFS ingest, alerts.
 Dagster moves into phase 1 as the scheduler (D12).
+
+## Terrain and leave-stations-out (2026-10-06, evening)
+
+`microcast build static` computes 14 terrain features per point into
+`silver.static_features` (`transform/static.py`): USGS 3DEP elevation on a
+10 m grid over the HRRR window (`ingest/dem.py`, fetched once as 10 km tiles,
+cached in `data/terrain/`), HRRR's own terrain height and the gap between the
+two, slope and aspect, relative elevation at 300 m and 2 km, distance to water,
+overland fetch upwind at 250° and 290°, and Winstral's shelter index (250° at
+1 km and 5 km, 070° at 5 km). Water is `elevation <= 0` (3DEP carries
+bathymetry) plus flat ground below 2 m (open water outside the bathymetry).
+69 points: registry points, MADIS stations, PurpleAir sensors.
+
+Three new models: `gbm_terrain` (`gbm_residual` with terrain in place of
+the station id), `gbm_nwp` (HRRR, time and lead only: no obs from the point
+itself) and `gbm_nwp_terrain`. `microcast backtest --holdout` splits the 36
+stations into 6 fixed groups and tests each group on models trained only on
+the other 30, in quarterly rolling folds (6 × 6 fits per model and target,
+~1.5 h). Reports in `data/reports/holdout/`, not the lake.
+
+Skill vs raw HRRR, all held-out stations pooled, [95% CI]:
+
+| Model | Temp 1–3 h | Temp 4–6 h | Gust 1–3 h | Gust 4–6 h |
+| --- | --- | --- | --- | --- |
+| `gbm_nwp` (no station obs, no terrain) | +1.0% [−0.3, +2.4] | +0.5% | +19.7% | +21.5% |
+| `gbm_nwp_terrain` (no station obs) | **+8.0%** [+6.7, +9.4] | **+5.9%** | **+22.1%** | **+23.9%** |
+| `gbm_residual` (own obs, unseen id) | +37.2% | +21.0% | +47.0% | +41.1% |
+| `gbm_terrain` (own obs) | **+41.3%** [+40.3, +42.3] | **+25.6%** | **+51.0%** | **+46.3%** |
+
+- **A point's own recent obs carry most of the skill.** Without them
+  (`gbm_nwp`), a pooled GBM can't correct temperature at all at a new place;
+  the gain everywhere else in this spec comes from the station's last obs,
+  HRRR's error at init and the rolling bias. For the ride and the house today,
+  the next step is a nearby station's obs as features, not more terrain.
+- **Terrain helps temperature where HRRR's ground is wrong.** Without station
+  obs, the biggest gains are on ridges and slopes HRRR flattens: 180PG +28
+  points, F6803 +27, PG521 +26, AW038 +20. It hurts at a few (AU915 −19, a
+  170 m Sausalito hill where HRRR's terrain is 26 m).
+- **Terrain doesn't fix gust at a new place.** Pooled +2 points, per station
+  anywhere from −38 to +35. CWOP gust is the sensor's own shelter (backyard
+  fences and roofs), which a 10 m DEM can't see. 604PG, the open-park station
+  that matters for the ride, gains +16.
+- **With the station's obs, terrain beats the station id** by 4–5 points on
+  every target and lead bucket, so `gbm_terrain` loses nothing by dropping
+  the id, and it can be used at points it never trained on.
+- Calibration: the no-obs models' 80% intervals cover only 71–75% of
+  outcomes. Their sigma comes from training stations' residuals, which are
+  smaller than a new station's.
+
+**Rolling monthly folds** (every station in training, 16 folds, gold snapshot
+`3857895018820912251`), skill vs raw HRRR, all 36 / original 4:
+
+| Target | Lead | `gbm_residual` | `gbm_terrain` | `gbm_purpleair` |
+| --- | --- | --- | --- | --- |
+| Temperature | 1–3 h | +48.7% / +42.7% | +48.5% / +42.6% | +49.0% / +43.1% |
+| Temperature | 4–6 h | +35.7% / +29.9% | +35.3% / +29.6% | +36.3% / +30.7% |
+| Gust | 1–3 h | +55.3% / +30.5% | +55.3% / +30.7% | +55.1% / +30.3% |
+| Gust | 4–6 h | +51.9% / +26.6% | +51.8% / +26.7% | +51.6% / +26.4% |
+
+On known stations terrain ties the station id (CIs ±0.7–1.0 points). So
+`gbm_terrain` is the better default for live inference: as good where there
+is history, better where there isn't, and it accepts points the registry adds
+later.
+
+## Golden Gate Bridge crosswind (2026-10-06, evening)
+
+**GGBC1 is on the bridge**: 37.8198, −122.4790, 82 m, mid-span between the
+towers at deck height, reporting wind, gust and direction every 15 minutes
+since 2025-04 (via MADIS). Fort Point (FTPC1) sits under the south end at the
+waterline.
+
+- **Its vane is mirrored.** It reports (c − true direction): as HRRR's
+  direction turns clockwise, GGBC1's turns anticlockwise. Fitting c gives 12°
+  against HRRR at the point and 359° against Fort Point, steady month to month
+  (December and January, with few strong winds, wander), and the mirror fits
+  far better than any rotation (mean resultant length 0.88 vs 0.77). Silver
+  now corrects it with c = 6° (`MIRRORED_VANES`); ±6° moves a crosswind by
+  under 1%. Its temperature and dewpoint are stuck and now flagged
+  `station_fault` (`STATION_FAULTS`).
+- **The bridge runs 354.7°** (OSM, the sidewalks), so a crosswind is wind from
+  ~85° or ~265°. The sea breeze through the Gate (250–270°) is nearly square
+  across the deck; 83% of hours have the wind on the west side.
+- **Crosswind gust** = gust × |sin(direction − 354.7°)|. June–July, 3–6 pm
+  local: mean 9.4–10.0 m/s, and P(> 9 m/s, ~20 mph) is 60–80%. Winter
+  mornings: 2–4 m/s, ~3%.
+- **Raw HRRR is already close at the bridge.** Its 10 m crosswind gust
+  correlates 0.81 with GGBC1's, bias +0.12 m/s; its plain gust bias at GGBC1
+  is −0.1 m/s (vs +3.5 inside Golden Gate Park).
+- **A GBM on GGBC1 alone** (gold features plus HRRR's crosswind gust, wind,
+  along-bridge wind and GGBC1's last crosswind gust), same monthly folds:
+  CRPS skill +19.2% [+17.8, +20.5] at 1–3 h, +16.1% [+14.7, +17.6] at
+  4–6 h, MAE 1.13 m/s (~2.5 mph). Brier score for "crosswind gust > 9 m/s"
+  0.051 vs raw HRRR 0.063 (base rate 11%). Exploratory: not yet in gold.
+- **HRRR's 80 m wind doesn't help.** Sampled at GGBC1 for 150 summer
+  afternoons (f01–f06 from 20Z): its crosswind correlates 0.68 with GGBC1's
+  crosswind gust vs 0.69 for the 10 m crosswind gust, and adding it to a
+  linear fit doesn't lower the error. Not worth a backfill.
+- One sensor can't say which sidewalk is worse, or what the towers do to
+  gusts locally.
 
 ## PurpleAir with vs without (2026-10-06)
 
@@ -172,8 +296,8 @@ Training on the network made the original stations' **gust** forecasts about
   sensor but isn't weather skill. 604PG (open park, +72%) and the original four
   are the honest gust numbers.
 - GGBC1 (Golden Gate Bridge) shows −9% temperature skill on only 3 scored rows
-  with 26 °C errors: bad observations that pass the range check. To do: a
-  per-station sanity check in silver.
+  with 26 °C errors: bad observations that pass the range check. Fixed
+  2026-10-06: flagged `station_fault` in silver (see the bridge section).
 
 ## Results on hourly cycles (2026-10-05, evening)
 

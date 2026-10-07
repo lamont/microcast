@@ -231,12 +231,21 @@ NETWORK_FEATURES_SCHEMA = _wide(
 )
 GOLD_NETWORK_FEATURES = TableDef("gold", "network_features", NETWORK_FEATURES_SCHEMA, _spec(NETWORK_FEATURES_SCHEMA))
 
+# Terrain and exposure per point (transform.static), long: one row per (point, feature).
+STATIC_FEATURES_SCHEMA = _wide(
+    ("point_id", _S, True),
+    ("feature", _S, True),
+    ("value", _D, False),
+)
+SILVER_STATIC_FEATURES = TableDef("silver", "static_features", STATIC_FEATURES_SCHEMA, _spec(STATIC_FEATURES_SCHEMA))
+
 TABLES: list[TableDef] = [
     BRONZE_NWP_POINT,
     BRONZE_OBS,
     BRONZE_STATIONS,
     SILVER_OBS_QC,
     SILVER_NWP_ALIGNED,
+    SILVER_STATIC_FEATURES,
     GOLD_TRAINING,
     GOLD_NETWORK_FEATURES,
     GOLD_FORECASTS,

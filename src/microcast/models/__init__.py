@@ -14,6 +14,12 @@ the design's zoo:
 * ``gbm_purpleair``: the same model and settings plus the PurpleAir transect
   features (``pa_*`` columns from gold.network_features). The pair is an
   ablation: any difference in skill is what the transect adds.
+* ``gbm_terrain``: ``gbm_residual`` with the point's terrain (``st_*`` columns
+  from silver.static_features) in place of its identity, so what it learns
+  carries to points it never saw.
+* ``gbm_nwp`` / ``gbm_nwp_terrain``: HRRR, time and lead only, without and
+  with terrain; no obs from the point itself. The forecast for a place
+  with no station (the ride, the house today), scored on held-out stations.
 """
 
 from __future__ import annotations
@@ -79,14 +85,19 @@ class BiasRolling:
         )
 
 
+def nwp_columns() -> list[str]:
+    return [f"nwp_{f}" for f in NWP_FIELDS] + ["hour_sin", "hour_cos", "doy_sin", "doy_cos", "lead_min"]
+
+
 def feature_columns() -> list[str]:
-    cols = [f"nwp_{f}" for f in NWP_FIELDS] + ["hour_sin", "hour_cos", "doy_sin", "doy_cos", "lead_min"]
+    cols = nwp_columns()
     cols += [f"{p}_{t}" for t in TARGETS for p in ("obs_last", "err_at_init", "bias14", "std14")]
     return cols + ["point"]
 
 
 class GBMResidual:
     name = "gbm_residual"
+    needs: tuple[str, ...] = ()  # extra inputs the pipeline joins onto gold: "network", "static"
     params = dict(
         objective="regression",
         learning_rate=0.03,
@@ -112,7 +123,8 @@ class GBMResidual:
 
     def _X(self, df: pd.DataFrame) -> pd.DataFrame:
         X = df.reindex(columns=self.cols).copy()
-        X["point"] = pd.Categorical(df.point_id, categories=self.points)
+        if "point" in self.cols:
+            X["point"] = pd.Categorical(df.point_id, categories=self.points)
         return X
 
     def fit(self, train: pd.DataFrame) -> None:
@@ -144,6 +156,7 @@ class GBMResidual:
 
 class GBMPurpleAir(GBMResidual):
     name = "gbm_purpleair"
+    needs = ("network",)
 
     def columns(self, df: pd.DataFrame) -> list[str]:
         pa_cols = sorted(c for c in df.columns if c.startswith("pa_"))
@@ -152,11 +165,44 @@ class GBMPurpleAir(GBMResidual):
         return [*feature_columns()[:-1], *pa_cols, "point"]
 
 
+def _static_cols(df: pd.DataFrame) -> list[str]:
+    cols = sorted(c for c in df.columns if c.startswith("st_"))
+    if not cols:
+        raise ValueError("terrain models need the st_* static features joined onto gold")
+    return cols
+
+
+class GBMTerrain(GBMResidual):
+    name = "gbm_terrain"
+    needs = ("static",)
+
+    def columns(self, df: pd.DataFrame) -> list[str]:
+        return [*feature_columns()[:-1], *_static_cols(df)]
+
+
+class GBMNWP(GBMResidual):
+    name = "gbm_nwp"
+
+    def columns(self, df: pd.DataFrame) -> list[str]:
+        return nwp_columns()
+
+
+class GBMNWPTerrain(GBMResidual):
+    name = "gbm_nwp_terrain"
+    needs = ("static",)
+
+    def columns(self, df: pd.DataFrame) -> list[str]:
+        return [*nwp_columns(), *_static_cols(df)]
+
+
 MODELS = {
     "raw_hrrr": RawNWP,
     "bias_rolling": BiasRolling,
     "gbm_residual": GBMResidual,
     "gbm_purpleair": GBMPurpleAir,
+    "gbm_terrain": GBMTerrain,
+    "gbm_nwp": GBMNWP,
+    "gbm_nwp_terrain": GBMNWPTerrain,
 }
 
 

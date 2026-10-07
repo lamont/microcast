@@ -1,6 +1,7 @@
 """Bronze -> silver: dedupe, clean, align. Each build replaces whole partitions.
 
-* ``silver.obs_qc``: latest ``ingested_at`` per natural key, range checks.
+* ``silver.obs_qc``: latest ``ingested_at`` per natural key, range checks, and
+  fixes for known station faults (``STATION_FAULTS``, ``MIRRORED_VANES``).
 * ``silver.nwp_aligned``: one wide row per (model, cycle, lead, point). The 4
   neighbour cells are combined by inverse-distance weighting; u/v are rotated
   from HRRR's grid-relative frame to earth-relative per cell first.
@@ -41,6 +42,17 @@ RANGES = {
     "rh_sensor": (0, 100),
     "solar": (0, 1400),  # W/m2; clear-sky noon at SF peaks near 1000
 }
+
+# Known station faults, found against neighbours and HRRR (docs/specs/phase-1.md).
+# Listed (station, variable) pairs are flagged ``station_fault`` whatever their values.
+STATION_FAULTS = {
+    ("GGBC1", "t2m"),  # stuck near -10.7 C, then missing: passed the range check
+    ("GGBC1", "d2m"),  # stuck at -73 C
+}
+# Vanes that turn the wrong way: they report (c - true direction). GGBC1 (Golden Gate
+# Bridge, mid-span): c = 12 against HRRR at the point, 359 against Fort Point, steady
+# month to month; a mirror fits far better than any rotation. 6 splits the two.
+MIRRORED_VANES = {"GGBC1": 6.0}
 
 _BRONZE_NWP_COLS = (
     "model",
@@ -138,15 +150,20 @@ WITH latest AS (
     QUALIFY row_number() OVER (
         PARTITION BY source, station_id, obs_time, variable ORDER BY ingested_at DESC) = 1
 )
-SELECT source, station_id, obs_time, variable, value,
+SELECT l.source, l.station_id, l.obs_time, l.variable,
+    CASE WHEN l.variable = 'wdir10' AND v.c IS NOT NULL THEN (v.c - l.value + 720) % 360 ELSE l.value END AS value,
     CASE
-        WHEN value IS NULL OR isnan(value) THEN 'missing'
-        WHEN qc_flag IN ('B', 'X') THEN 'source_rejected'  -- MADIS QC: bad / rejected
-        WHEN value < r.lo OR value > r.hi THEN 'range'
+        WHEN l.value IS NULL OR isnan(l.value) THEN 'missing'
+        WHEN f.station_id IS NOT NULL THEN 'station_fault'
+        WHEN l.qc_flag IN ('B', 'X') THEN 'source_rejected'  -- MADIS QC: bad / rejected
+        WHEN l.value < r.lo OR l.value > r.hi THEN 'range'
         ELSE 'ok'
     END AS qc_flag,
-    ingested_at
-FROM latest LEFT JOIN ranges r USING (variable)
+    l.ingested_at
+FROM latest l
+LEFT JOIN ranges r ON r.variable = l.variable
+LEFT JOIN faults f ON f.station_id = l.station_id AND f.variable = l.variable
+LEFT JOIN vanes v ON v.station_id = l.station_id
 """
 
 
@@ -167,6 +184,10 @@ def build_obs_qc(bronze: pa.Table) -> pa.Table:
         {"variable": list(RANGES), "lo": [lo for lo, _ in RANGES.values()], "hi": [hi for _, hi in RANGES.values()]}
     )
     con.register("ranges", ranges)
+    con.register(
+        "faults", pa.table({"station_id": [s for s, _ in STATION_FAULTS], "variable": [v for _, v in STATION_FAULTS]})
+    )
+    con.register("vanes", pa.table({"station_id": list(MIRRORED_VANES), "c": list(MIRRORED_VANES.values())}))
     return _conform(con, OBS_QC_SQL, OBS_QC_SCHEMA)
 
 

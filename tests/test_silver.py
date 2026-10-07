@@ -85,3 +85,20 @@ def test_obs_qc_dedupes_and_flags():
     out = silver.build_obs_qc(pa.Table.from_pylist([base | r for r in rows], schema=OBS_SCHEMA.as_arrow()))
     got = {r["variable"]: (r["value"], r["qc_flag"]) for r in out.to_pylist()}
     assert got == {"t2m": (16.0, "ok"), "gust": (120.0, "range"), "pm25_b": (3333.56, "range")}
+
+
+def test_station_faults_flagged_and_mirrored_vane_fixed():
+    t = INIT
+    base = dict(source="madis", station_id="GGBC1", obs_time=t, qc_flag="V", ingest_batch="b", ingested_at=t)
+    rows = [
+        dict(variable="t2m", value=-10.7),  # stuck sensor, inside the range check
+        dict(variable="wdir10", value=116.0),  # reads (6 - true): wind really from the west, 250
+        dict(variable="gust", value=11.0),
+    ]
+    other = dict(base, station_id="FTPC1", variable="wdir10", value=116.0)
+    out = silver.build_obs_qc(pa.Table.from_pylist([base | r for r in rows] + [other], schema=OBS_SCHEMA.as_arrow()))
+    got = {(r["station_id"], r["variable"]): (r["value"], r["qc_flag"]) for r in out.to_pylist()}
+    assert got[("GGBC1", "t2m")] == (-10.7, "station_fault")
+    assert got[("GGBC1", "wdir10")] == (250.0, "ok")
+    assert got[("GGBC1", "gust")] == (11.0, "ok")
+    assert got[("FTPC1", "wdir10")] == (116.0, "ok")  # other stations untouched

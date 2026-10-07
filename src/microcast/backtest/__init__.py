@@ -5,6 +5,9 @@ Protocol (design doc, Backtesting and evaluation):
 * Monthly folds: train on every row whose truth was known before the test
   month starts, test on that month, step a month. Every model sees the same
   folds.
+* Leave-stations-out (``run_holdout``): the stations split into groups; each
+  group is tested on models trained only on the other stations, in quarterly
+  rolling folds. This is the test for points with no station of their own.
 * Lead 0 is not scored: issued 55 min after its valid time, it is a hindcast.
   Leads 1-6 are ~5 min to ~5 h ahead of issue.
 * Scores: Gaussian CRPS (primary), MAE of the mean, and p10-p90 coverage.
@@ -62,6 +65,72 @@ def monthly_folds(init_times: pd.Series, min_train_months: int = 3) -> list[Fold
     return folds
 
 
+def station_groups(stations: list[str], n_groups: int, seed: int = 7) -> list[list[str]]:
+    """A fixed random split of the stations into ``n_groups`` near-equal groups."""
+    order = np.random.default_rng(seed).permutation(sorted(stations))
+    return [sorted(order[i::n_groups].tolist()) for i in range(n_groups)]
+
+
+def _scored_frame(name: str, target: str, fold: str, test: pd.DataFrame, pred: pd.DataFrame, run_id: str = ""):
+    return pd.DataFrame(
+        {
+            "model_name": name,
+            "run_id": run_id,
+            "kind": "backtest",
+            "fold": fold,
+            "variable": target,
+            "point_id": test.point_id,
+            "init_time": test.init_time,
+            "issue_time": test.issue_time,
+            "lead_min": test.lead_min,
+            "valid_time": test.valid_time,
+            "obs": test[f"obs_{target}"],
+            "mu": pred.mu,
+            "sigma": pred.sigma,
+        }
+    )
+
+
+def _score(df: pd.DataFrame) -> pd.DataFrame:
+    df["p10"], df["p50"], df["p90"] = df.mu - Z90 * df.sigma, df.mu, df.mu + Z90 * df.sigma
+    df["error"] = df.mu - df.obs
+    df["crps"] = crps_gaussian(df.mu.to_numpy(), df.sigma.to_numpy(), df.obs.to_numpy())
+    df["in_p10_p90"] = ((df.obs >= df.p10) & (df.obs <= df.p90)).astype("int32")
+    return df
+
+
+def run_holdout(
+    gold: pd.DataFrame,
+    model_names: list[str],
+    targets: list[str],
+    groups: list[list[str]],
+    *,
+    min_train_months: int = 3,
+    fold_months: int = 3,
+    log: Callable[[str], None] = print,
+) -> pd.DataFrame:
+    """Leave-stations-out: train on the other groups before the fold, test on this group in it."""
+    out = []
+    for target in targets:
+        rows = gold[gold[f"obs_{target}"].notna() & gold[f"nwp_{target}"].notna()]
+        folds = monthly_folds(rows.init_time, min_train_months)[::fold_months]
+        for name in model_names:
+            for fold in folds:
+                end = fold.test_start + pd.DateOffset(months=fold_months)
+                for k, group in enumerate(groups):
+                    held = rows.point_id.isin(group)
+                    train = rows[~held & (rows.valid_time < fold.test_start)]
+                    test = rows[held & (rows.init_time >= fold.test_start) & (rows.init_time < end)]
+                    test = test[test.lead_min >= 60]
+                    if test.empty or train.empty:
+                        continue
+                    model = zoo.make(name, target)
+                    model.fit(train)
+                    out.append(_scored_frame(name, target, f"{fold.name}/g{k}", test, model.predict(test)))
+            log(f"  {target} {name}: {len(folds)} folds x {len(groups)} groups")
+    return _score(pd.concat(out, ignore_index=True))
+
+
 def run(
     gold: pd.DataFrame,
     model_names: list[str],
@@ -89,32 +158,9 @@ def run(
                 model = zoo.make(name, target)
                 model.fit(train)
                 pred = model.predict(test)
-                out.append(
-                    pd.DataFrame(
-                        {
-                            "model_name": name,
-                            "run_id": run_ids.get((name, target), ""),
-                            "kind": "backtest",
-                            "fold": fold.name,
-                            "variable": target,
-                            "point_id": test.point_id,
-                            "init_time": test.init_time,
-                            "issue_time": test.issue_time,
-                            "lead_min": test.lead_min,
-                            "valid_time": test.valid_time,
-                            "obs": test[f"obs_{target}"],
-                            "mu": pred.mu,
-                            "sigma": pred.sigma,
-                        }
-                    )
-                )
+                out.append(_scored_frame(name, target, fold.name, test, pred, run_ids.get((name, target), "")))
             log(f"  {target} {name}: {len(folds)} folds")
-    df = pd.concat(out, ignore_index=True)
-    df["p10"], df["p50"], df["p90"] = df.mu - Z90 * df.sigma, df.mu, df.mu + Z90 * df.sigma
-    df["error"] = df.mu - df.obs
-    df["crps"] = crps_gaussian(df.mu.to_numpy(), df.sigma.to_numpy(), df.obs.to_numpy())
-    df["in_p10_p90"] = ((df.obs >= df.p10) & (df.obs <= df.p90)).astype("int32")
-    return df
+    return _score(pd.concat(out, ignore_index=True))
 
 
 def to_tables(scored: pd.DataFrame) -> tuple[pa.Table, pa.Table]:

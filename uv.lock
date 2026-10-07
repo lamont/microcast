@@ -1499,6 +1499,11 @@ nwp = [
     { name = "scikit-learn" },
     { name = "scipy" },
 ]
+terrain = [
+    { name = "requests" },
+    { name = "scipy" },
+    { name = "tifffile" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -1521,14 +1526,17 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.2.4" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "requests", marker = "extra == 'nwp'", specifier = ">=2.34.2" },
+    { name = "requests", marker = "extra == 'terrain'", specifier = ">=2.34.2" },
     { name = "scikit-learn", marker = "extra == 'nwp'", specifier = ">=1.9.1" },
     { name = "scipy", marker = "extra == 'ml'", specifier = ">=1.18.1" },
     { name = "scipy", marker = "extra == 'nwp'", specifier = ">=1.18.1" },
+    { name = "scipy", marker = "extra == 'terrain'", specifier = ">=1.18.1" },
     { name = "shapely", specifier = ">=2.1.2" },
+    { name = "tifffile", marker = "extra == 'terrain'", specifier = ">=2026.9.20" },
     { name = "typer", specifier = ">=0.27.2" },
     { name = "xarray", specifier = ">=2026.9.0" },
 ]
-provides-extras = ["nwp", "ml"]
+provides-extras = ["nwp", "ml", "terrain"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -3220,6 +3228,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/00/dc/6c58154c1c65f758ea979e7139cb76993a9cfc662d14e9be3c4a667cfb77/threadpoolctl-3.7.0.tar.gz", hash = "sha256:61348cfb77d53b9242e0017029244b559b810c142ced65b4e21eeca1843959a7", size = 31961, upload-time = "2026-09-15T15:46:20.263Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/43/3f/f88a53f60a472b46f4023f56d204dd7de33d34c5d2acbfa0d70a674e639e/threadpoolctl-3.7.0-py3-none-any.whl", hash = "sha256:cd8b60b5641b45c67bbf73c64c843235fc2d8a480c87389f52f5dbee893b86be", size = 26362, upload-time = "2026-09-15T15:46:19.168Z" },
+]
+
+[[package]]
+name = "tifffile"
+version = "2026.9.20"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/92/66/634db78ebad513038d753830dd8815eea26278b5463ba0f43198b0c24c4e/tifffile-2026.9.20.tar.gz", hash = "sha256:30e145a7042ce7143ae50a50fe8b7221b0070aae22adab8f9e79a264be6b5cdc", size = 449417, upload-time = "2026-09-21T03:59:40.055Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/05/bf/04f3e61cb20a03678ca43f29bae9a7d0b7d9f563b86f5f600b2d8fba9712/tifffile-2026.9.20-py3-none-any.whl", hash = "sha256:9b913167b8f66a57f2e7c0454486c4c4607196d494797461226166bd0755c0e6", size = 275004, upload-time = "2026-09-21T03:59:38.46Z" },
 ]
 
 [[package]]

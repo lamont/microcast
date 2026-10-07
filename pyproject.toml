@@ -33,6 +33,11 @@ ml = [
     "mlflow>=3.16.1",
     "scipy>=1.18.1",
 ]
+terrain = [
+    "requests>=2.34.2",
+    "scipy>=1.18.1",
+    "tifffile>=2026.9.20",
+]
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]
