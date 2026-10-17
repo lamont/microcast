@@ -34,6 +34,12 @@ def _get(t: pa.Table, init: datetime, feature: str):
 SENSORS = {"pa_1": -122.50, "pa_2": -122.49, "pa_3": -122.44, "pa_4": -122.43}  # two west, two east
 
 
+def test_empty_sensor_registry_returns_typed_empty_table_without_network_work():
+    out = network.build_features(_obs([]), {})
+    assert out.schema == NETWORK_FEATURES_SCHEMA.as_arrow()
+    assert out.num_rows == 0
+
+
 def test_changes_use_only_hours_complete_at_init():
     # pa_1 warms 1 degree an hour; the hour starting at 05:00 jumps by 10.
     rows = [("pa_1", T0 + h * H, float(h) + (10 if h == 5 else 0)) for h in range(8)]

@@ -63,20 +63,30 @@ def freshness(con: duckdb.DuckDBPyConnection) -> dict:
         .iloc[0]
         .to_dict()
     )
-    obs = catalog.load_table("silver.obs_qc").scan(selected_fields=("station_id", "obs_time", "qc_flag")).to_arrow()
+    obs = (
+        catalog.load_table("silver.obs_qc")
+        .scan(selected_fields=("source", "station_id", "obs_time", "qc_flag"))
+        .to_arrow()
+    )
     con.register("obs", obs)
     out["stations"] = _records(
         con.sql("""
-            SELECT station_id, min(obs_time) AS first, max(obs_time) AS last, count(*) AS rows,
+            SELECT station_id, string_agg(DISTINCT source, ', ' ORDER BY source) AS source,
+                   min(obs_time) AS first, max(obs_time) AS last, count(*) AS rows,
                    avg((qc_flag <> 'ok')::int) AS flagged
             FROM obs GROUP BY 1 ORDER BY 1""").df()
     )
-    out["hrrr"] = {k: (v.isoformat() if isinstance(v, pd.Timestamp) else int(v)) for k, v in out["hrrr"].items()}
+    out["hrrr"] = {
+        k: (v.isoformat() if isinstance(v, pd.Timestamp) and not pd.isna(v) else None if pd.isna(v) else int(v))
+        for k, v in out["hrrr"].items()
+    }
     return out
 
 
 def analytics(scores: pd.DataFrame) -> dict:
     """Breakdowns for the analytics page, all on backtest rows (leads 1-6)."""
+    if scores.empty:
+        return dict(by_lead=[], by_hour=[], pit=[], raw_bias=[])
     con = duckdb.connect()
     s = scores.assign(
         lead_h=scores.lead_min // 60,
@@ -110,6 +120,8 @@ def gate(board: pd.DataFrame) -> list[dict]:
     Judged on the original four stations when the backtest pooled them (it has
     more stations since 2026-10-06), else on all stations.
     """
+    if board.empty:
+        return []
     out = []
     point = "original" if (board.point == "original").any() else "all"
     for variable, g in board[(board.model == GATE_MODEL) & (board.point == point)].groupby("variable"):
@@ -127,17 +139,29 @@ def gate(board: pd.DataFrame) -> list[dict]:
 def _stations(reg, scores: pd.DataFrame) -> list[dict]:
     """Registry stations, then every other station the backtest scored (MADIS), by id."""
     source = {s.id: s.source for s in reg.stations}
-    ids = sorted(set(source) | set(scores.point_id.unique()))
+    scored = set(scores.point_id.unique()) if "point_id" in scores else set()
+    ids = sorted(set(source) | scored)
     return [dict(id=i, source=source.get(i, "madis")) for i in ids]
 
 
 def build(out_dir: Path) -> Path:
     reports = reports_dir()
-    board = pd.read_csv(reports / "leaderboard.csv")
-    monthly = pd.read_csv(reports / "monthly_skill.csv")
-    meta = json.loads((reports / "backtest_meta.json").read_text())
+    report_files = [reports / "leaderboard.csv", reports / "monthly_skill.csv", reports / "backtest_meta.json"]
+    present = [p.exists() for p in report_files]
+    if any(present) and not all(present):
+        raise RuntimeError(
+            "backtest reports are incomplete; expected leaderboard.csv, monthly_skill.csv, and backtest_meta.json"
+        )
+    has_backtest = all(present)
+    board = pd.read_csv(report_files[0]) if has_backtest else pd.DataFrame()
+    monthly = pd.read_csv(report_files[1]) if has_backtest else pd.DataFrame()
+    meta = json.loads(report_files[2].read_text()) if has_backtest else None
+    # Snapshot ids exceed JavaScript's exact integer range; preserve them as text
+    # at the browser JSON boundary so the dashboard never displays a rounded id.
+    if meta is not None and "gold_snapshot_id" in meta:
+        meta["gold_snapshot_id"] = str(meta["gold_snapshot_id"])
     scores = get_catalog().load_table("gold.scores").scan(row_filter=EqualTo("kind", "backtest")).to_pandas()
-    scores = backtest.common_rows(scores)
+    scores = backtest.common_rows(scores) if not scores.empty else scores
     reg = registry.load()
     con = duckdb.connect()
     data = dict(

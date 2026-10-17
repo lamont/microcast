@@ -57,7 +57,10 @@ class Box:
     lon_max: float = -122.33
 
 
-SF_BAY_BOX = Box()
+def configured_box() -> Box:
+    from microcast import settings
+
+    return Box(*settings.madis_bounds())
 
 
 def hour_url(t: datetime) -> str:
@@ -154,13 +157,15 @@ def backfill(
     start: datetime,
     end: datetime,
     *,
-    box: Box = SF_BAY_BOX,
+    box: Box | None = None,
     workers: int = 4,
     commit_every: int = 48,
     log: Callable[[str], None] = print,
 ) -> dict[str, int]:
     """Every hour in [start, end) not yet in bronze.obs; resumable like the HRRR backfill."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    box = configured_box() if box is None else box
 
     from microcast.lake.catalog import append_bronze, recorded_batches
 

@@ -123,6 +123,30 @@ uv run microcast site --out site                          # static pages for wea
 python -m http.server -d site 8000
 ```
 
+For an explicit station holdout, add `--holdout-stations ID1,ID2` to
+`backtest --holdout`. All listed stations are withheld together; the remaining
+stations supply training data. Without this option, the existing grouped
+station holdouts are unchanged.
+
+Both backtest modes accept `--start` and `--end` to select forecast cycles in
+the half-open UTC interval `[start, end)`. This filters the data available for
+both training and evaluation, so include at least three training months plus
+a later test month. It does not select a test-only window. For example:
+
+```sh
+uv run microcast backtest --holdout --holdout-stations KSFO,KOAK \
+  --models raw_hrrr,gbm_nwp --start 2025-04-01 --end 2025-08-01
+```
+
+Holdout reports record the window and training/held-out station groups under
+`data/reports/holdout/`; they leave rolling backtest lake tables and reports
+unchanged. A rolling `backtest` still replaces its usual forecast/score tables
+and reports, including when a window is specified.
+
+The status site can also be built immediately after `microcast lake init`.
+It shows ingestion status and an empty backtest state until results exist.
+A partially written report set is rejected rather than displayed as complete.
+
 Collectors, run by hand until Dagster schedules them (D12): `microcast ingest
 synoptic` (at least weekly; the free tier keeps only 7 days), `microcast ingest
 purpleair` (every 2 min on the home network). MADIS history: `microcast
@@ -147,6 +171,32 @@ Each ingest batch appends new Parquet files and a new Iceberg snapshot to
 `bronze`, which is append-only. Silver and gold rebuild whole partitions into
 fewer, larger files. To move from local disk to Lakekeeper and S3/MinIO, set
 the `PYICEBERG_CATALOG__MICROCAST__*` variables; no code changes.
+
+## Trying another station network
+
+Use a private `config/places.local.yaml` (or `MICROCAST_PLACES`) for station
+IDs and places, and set the optional `.env` collection bounds as
+`lat_min,lat_max,lon_min,lon_max`:
+
+- `MICROCAST_HRRR_BOUNDS` selects the historical HRRR cache window. Include
+  every registry and network point; the bounds plus interpolation margin must
+  fit within the supported HRRR grid.
+- `MICROCAST_MADIS_BOUNDS` selects the observations retained from each national
+  MADIS archive. It does not reduce the downloaded archive size.
+
+Both retain the existing San Francisco defaults when unset. Use a separate
+`MICROCAST_DATA_DIR` for each region (and a separate catalog if configuring a
+remote catalog): completed ingestion batches are tracked by time, so changing
+bounds or station IDs does not automatically backfill previously completed
+hours for the new configuration.
+
+**Terrain remains limited to the built-in San Francisco DEM.**
+`microcast build static` rejects points outside that coverage before fetching
+terrain, and sampling a cached DEM rejects out-of-bounds points instead of
+silently returning its edge values. For another region, use the existing
+models that do not require static features, such as `raw_hrrr` and `gbm_nwp`.
+An empty PurpleAir sensor registry produces an empty network-feature table.
+Dashboard times remain Pacific time.
 
 ## Layout
 

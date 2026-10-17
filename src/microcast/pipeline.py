@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -87,17 +88,56 @@ def load_gold(model_names: list[str], log: Callable[[str], None] = print) -> tup
 
 
 def run_holdout(
-    model_names: list[str], targets: list[str], *, n_groups: int = 6, log: Callable[[str], None] = print
+    model_names: list[str],
+    targets: list[str],
+    *,
+    n_groups: int = 6,
+    heldout_stations: list[str] | None = None,
+    start: datetime | pd.Timestamp | None = None,
+    end: datetime | pd.Timestamp | None = None,
+    log: Callable[[str], None] = print,
 ) -> pd.DataFrame:
     """Leave-stations-out backtest -> data/reports/holdout/; returns the leaderboard.
 
     Exploratory: nothing is written to the lake or MLflow, so it never
     replaces the rolling backtest's gold.forecasts and gold.scores.
     """
+    start, end = _window_bounds(start, end)
+    requested_models = list(model_names)
+    selected_stations = None
+    if heldout_stations is not None:
+        selected_stations = sorted({station.strip() for station in heldout_stations if station.strip()})
+        if not selected_stations:
+            raise ValueError("holdout stations must include at least one non-empty station ID")
     gold, snapshots = load_gold(model_names, log)
+    gold = _filter_window(gold, start, end)
+    if gold.empty:
+        raise ValueError("holdout window contains no training examples")
     if backtest.BASELINE not in model_names:
         model_names = [backtest.BASELINE, *model_names]
-    groups = backtest.station_groups(sorted(gold.point_id.unique()), n_groups)
+    stations = set(gold.point_id.unique())
+    if selected_stations is not None:
+        heldout = selected_stations
+        missing = sorted(set(heldout) - stations)
+        if missing:
+            raise ValueError(f"holdout stations not present in the selected window: {', '.join(missing)}")
+        training = sorted(stations - set(heldout))
+        if not training:
+            raise ValueError("holdout requires at least one training station")
+        groups = [heldout]
+        for target in targets:
+            usable = gold[gold[f"obs_{target}"].notna() & gold[f"nwp_{target}"].notna()]
+            if not usable[usable.point_id.isin(heldout)].shape[0]:
+                raise ValueError(f"holdout stations have no usable test rows for {target}")
+            folds = backtest.monthly_folds(usable.init_time)
+            if not folds:
+                raise ValueError(f"holdout window has insufficient usable data for {target}")
+            train = usable[~usable.point_id.isin(heldout) & (usable.valid_time < folds[0].test_start)]
+            test = usable[usable.point_id.isin(heldout) & (usable.init_time >= folds[0].test_start)]
+            if train.empty or test[test.lead_min >= 60].empty:
+                raise ValueError(f"holdout has insufficient training or test rows for {target}")
+    else:
+        groups = backtest.station_groups(sorted(stations), n_groups)
     log(" | ".join(" ".join(g) for g in groups))
     scored = backtest.run_holdout(gold, model_names, targets, groups, log=log)
     board = backtest.leaderboard(scored, groups={"original": backtest.ORIGINAL_STATIONS})
@@ -108,6 +148,15 @@ def run_holdout(
     meta = {
         "snapshots": snapshots,
         "groups": groups,
+        "heldout_stations": selected_stations,
+        # Grouped holdouts have a different training set per fold/group. Keep
+        # this explicit instead of implying one global training set.
+        "training_stations": sorted(stations - set(selected_stations)) if selected_stations is not None else None,
+        "training_stations_by_group": {str(i): sorted(stations - set(group)) for i, group in enumerate(groups)},
+        "window_start": start.isoformat() if start is not None else None,
+        "window_end": end.isoformat() if end is not None else None,
+        "models": requested_models,
+        "targets": targets,
         "git_sha": _git_sha(),
         "generated_at": pd.Timestamp.now(tz="UTC").isoformat(),
     }
@@ -156,11 +205,24 @@ def run_nbm_comparison(models: list[str], *, n_boot: int = 1000, log: Callable[[
 
 
 def run_backtests(
-    model_names: list[str], targets: list[str], *, log: Callable[[str], None] = print
+    model_names: list[str],
+    targets: list[str],
+    *,
+    start: datetime | pd.Timestamp | None = None,
+    end: datetime | pd.Timestamp | None = None,
+    log: Callable[[str], None] = print,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Backtest, store forecasts and scores, log to MLflow; returns (leaderboard, monthly)."""
+    start, end = _window_bounds(start, end)
     mlflow = _mlflow()
     gold, snapshots = load_gold(model_names, log)
+    gold = _filter_window(gold, start, end)
+    if gold.empty:
+        raise ValueError("backtest window contains no training examples")
+    usable = {target: gold[gold[f"obs_{target}"].notna() & gold[f"nwp_{target}"].notna()] for target in targets}
+    missing = [target for target, rows in usable.items() if rows.empty or not backtest.monthly_folds(rows.init_time)]
+    if missing:
+        raise ValueError(f"backtest window has insufficient usable data for: {', '.join(missing)}")
     snapshot_id, net_snapshot = snapshots["gold"], snapshots.get("network")
     if backtest.BASELINE not in model_names:
         model_names = [backtest.BASELINE, *model_names]
@@ -183,6 +245,8 @@ def run_backtests(
                         "stations": ",".join(sorted(gold.point_id.unique())),
                         "valid_from": str(gold.valid_time.min()),
                         "valid_to": str(gold.valid_time.max()),
+                        "window_start": start.isoformat() if start is not None else None,
+                        "window_end": end.isoformat() if end is not None else None,
                     }
                 )
                 part = backtest.run(gold, [name], [target], run_ids=run_ids, log=log)
@@ -212,11 +276,19 @@ def run_backtests(
                         f"coverage80_{tag}": row.coverage_80,
                     }
                 )
-    write_reports(board, monthly, snapshot_id, run_ids)
+    write_reports(board, monthly, snapshot_id, run_ids, start=start, end=end)
     return board, monthly
 
 
-def write_reports(board: pd.DataFrame, monthly: pd.DataFrame, snapshot_id: int, run_ids: dict) -> Path:
+def write_reports(
+    board: pd.DataFrame,
+    monthly: pd.DataFrame,
+    snapshot_id: int,
+    run_ids: dict,
+    *,
+    start: datetime | pd.Timestamp | None = None,
+    end: datetime | pd.Timestamp | None = None,
+) -> Path:
     out = reports_dir()
     board.to_csv(out / "leaderboard.csv", index=False)
     monthly.to_csv(out / "monthly_skill.csv", index=False)
@@ -225,6 +297,34 @@ def write_reports(board: pd.DataFrame, monthly: pd.DataFrame, snapshot_id: int, 
         "git_sha": _git_sha(),
         "generated_at": pd.Timestamp.now(tz="UTC").isoformat(),
         "runs": {f"{m}/{t}": r for (m, t), r in run_ids.items()},
+        "window_start": start.isoformat() if start is not None else None,
+        "window_end": end.isoformat() if end is not None else None,
     }
     (out / "backtest_meta.json").write_text(json.dumps(meta, indent=2))
     return out
+
+
+def _window_bounds(
+    start: datetime | pd.Timestamp | None, end: datetime | pd.Timestamp | None
+) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+    def utc(value: datetime | pd.Timestamp | None) -> pd.Timestamp | None:
+        if value is None:
+            return None
+        stamp = pd.Timestamp(value)
+        if pd.isna(stamp):
+            raise ValueError("backtest window endpoints must be finite timestamps")
+        return stamp.tz_localize(UTC) if stamp.tzinfo is None else stamp.tz_convert(UTC)
+
+    start, end = utc(start), utc(end)
+    if start is not None and end is not None and start >= end:
+        raise ValueError("backtest window start must be before end")
+    return start, end
+
+
+def _filter_window(gold: pd.DataFrame, start: pd.Timestamp | None, end: pd.Timestamp | None) -> pd.DataFrame:
+    """Keep cycles in the half-open [start, end) experiment window."""
+    if start is not None:
+        gold = gold[gold.init_time >= start]
+    if end is not None:
+        gold = gold[gold.init_time < end]
+    return gold

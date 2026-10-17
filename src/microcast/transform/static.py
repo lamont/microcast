@@ -120,6 +120,7 @@ def features(dem: Dem, points: pd.DataFrame, hrrr_hgt: Iterable[float]) -> pd.Da
     dist_water = distance_transform_edt(~water) * dem.cell
 
     x, y = (np.asarray(v) for v in _TO_UTM.transform(points.lon.to_numpy(), points.lat.to_numpy()))
+    dem.validate_xy(x, y)
     elev = _sample(dem, ground, x, y)
     asp = np.radians(_sample(dem, aspect, x, y))
     out = pd.DataFrame(
@@ -198,6 +199,7 @@ def rebuild(points: pd.DataFrame) -> pd.DataFrame:
     from microcast.lake.catalog import replace_partition
 
     points = points.drop_duplicates("point_id").reset_index(drop=True)
+    dem.validate_points(points.lat.to_numpy(), points.lon.to_numpy())
     out = features(dem.load(), points, hrrr_terrain(points))
     replace_partition("silver.static_features", to_long(out), AlwaysTrue())
     return out

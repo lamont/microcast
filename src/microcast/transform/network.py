@@ -61,6 +61,14 @@ SELECT init_time, feature, value FROM long WHERE value IS NOT NULL ORDER BY init
 
 def build_features(obs: pa.Table, sensors: dict[str, float]) -> pa.Table:
     """``sensors``: station id -> longitude, for the west/east split."""
+    if not sensors:
+        return pa.table(
+            {
+                "init_time": pa.array([], type=pa.timestamp("us", tz="UTC")),
+                "feature": pa.array([], type=pa.string()),
+                "value": pa.array([], type=pa.float64()),
+            }
+        ).cast(NETWORK_FEATURES_SCHEMA.as_arrow())
     lons = sorted(sensors.values())
     median = lons[len(lons) // 2]
     con = duckdb.connect()

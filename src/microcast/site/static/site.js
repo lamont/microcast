@@ -185,6 +185,10 @@ function emptyCard(parent, title) {
   el("p", { class: "sub", text: "No models selected. Use the Models toggles above." }, card);
 }
 
+function noBacktest(parent) {
+  el("p", { class: "sub", text: "No backtest yet; collect at least 3 months training plus a later test month." }, parent);
+}
+
 function lineChart(parent, { title, xs, xLabel, series, yFormat, zeroLabel, tipFormat, every = 1 }) {
   if (!series.length) return emptyCard(parent, title);
   const f = frame(parent, { title });
@@ -358,6 +362,10 @@ function heatmap(parent, { title, rows, cols, value, n, unit, limit, labels }) {
 // ---- pages ------------------------------------------------------------------------
 
 function gateTiles(root, data) {
+  if (!data.gate.length) {
+    el("p", { class: "sub", text: "No GBM residual gate results are available for this backtest." }, root);
+    return;
+  }
   const tiles = el("div", { class: "tiles" }, root);
   for (const g of data.gate) {
     const t = el("div", { class: "card tile" }, tiles);
@@ -373,6 +381,10 @@ function gateTiles(root, data) {
 }
 
 function leaderboardTable(root, data) {
+  if (!data.leaderboard.length) {
+    noBacktest(root);
+    return;
+  }
   const card = el("div", { class: "card scroll" }, root);
   const t = el("table", {}, card);
   const head = ["Target", "Lead", "Model", "CRPS", "MAE", "Bias", "80% cover", "Skill vs raw", "95% CI", "n"];
@@ -408,13 +420,13 @@ function monthlyCharts(root, data) {
 function freshnessTables(root, data) {
   const fr = data.freshness;
   const card = el("div", { class: "card scroll" }, root);
-  el("p", { class: "sub", text: `HRRR cycles ${fmtTime(fr.hrrr.first)} → ${fmtTime(fr.hrrr.last)} (${fr.hrrr.cycles.toLocaleString()} cycles; latest ${ago(fr.hrrr.last)})` }, card);
+  el("p", { class: "sub", text: `HRRR cycles ${fmtTime(fr.hrrr.first)} → ${fmtTime(fr.hrrr.last)} (${(fr.hrrr.cycles || 0).toLocaleString()} cycles; latest ${ago(fr.hrrr.last)})` }, card);
   const t = el("table", {}, card);
   const tr = el("tr", {}, el("thead", {}, t));
   ["Station", "Source", "First obs", "Latest obs", "Rows", "QC flagged"].forEach((h, i) => el("th", { text: h, class: i > 3 ? "num" : "" }, tr));
   const tb = el("tbody", {}, t);
   for (const s of fr.stations) {
-    const src = data.stations.find((x) => x.id === s.station_id)?.source || "";
+    const src = s.source || data.stations.find((x) => x.id === s.station_id)?.source || "";
     const row = el("tr", {}, tb);
     [s.station_id, src, fmtTime(s.first), `${fmtTime(s.last)} (${ago(s.last)})`, s.rows.toLocaleString(), pct(s.flagged, 1)]
       .forEach((c, i) => el("td", { text: c, class: i > 3 ? "num" : "" }, row));
@@ -435,6 +447,11 @@ function freshnessTables(root, data) {
 const section = (id) => { const e = document.getElementById(id); e.replaceChildren(); return e; };
 
 function renderIndex(data) {
+  if (!data.backtest) {
+    ["gate", "leaderboard", "monthly"].forEach((id) => noBacktest(document.getElementById(id)));
+    freshnessTables(document.getElementById("freshness"), data);
+    return;
+  }
   gateTiles(document.getElementById("gate"), data);
   const draw = () => {
     leaderboardTable(section("leaderboard"), data);
@@ -446,6 +463,10 @@ function renderIndex(data) {
 }
 
 function renderAnalytics(data) {
+  if (!data.backtest) {
+    ["by-lead", "by-station", "by-hour", "pit", "raw-bias"].forEach((id) => noBacktest(document.getElementById(id)));
+    return;
+  }
   modelPicker(document.getElementById("models"), () => renderModelSections(data));
   renderModelSections(data);
   rawBiasHeatmap(data);
@@ -533,7 +554,7 @@ function rawBiasHeatmap(data) {
       labels: tsel.value === "gust" ? ["HRRR too gusty", "HRRR too calm"] : ["HRRR too warm", "HRRR too cold"],
     });
   };
-  sel.value = "SFOC1";
+  sel.value = data.stations.some((s) => s.id === "SFOC1") ? "SFOC1" : data.stations[0]?.id || "";
   sel.addEventListener("change", draw);
   tsel.addEventListener("change", draw);
   draw();
@@ -542,7 +563,9 @@ function rawBiasHeatmap(data) {
 function footer(data) {
   const f = document.querySelector("footer");
   const b = data.backtest;
-  f.textContent = `Generated ${fmtTime(data.generated_at)} PT · backtest ${fmtTime(b.generated_at)} · code ${b.git_sha} · gold snapshot ${b.gold_snapshot_id}`;
+  f.textContent = b
+    ? `Generated ${fmtTime(data.generated_at)} PT · backtest ${fmtTime(b.generated_at)} · code ${b.git_sha} · gold snapshot ${b.gold_snapshot_id}`
+    : `Generated ${fmtTime(data.generated_at)} PT · no backtest reports yet`;
 }
 
 fetch("data.json")

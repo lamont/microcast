@@ -16,7 +16,7 @@ Layout, per cycle ``YYYYMMDD_HHz``:
 * ``sfc/<day>/<cycle>_fcst.zarr/<level>/<VAR>/<level>/<VAR>/0.<cy>.<cx>``: leads
   1-18 (1-48 at 00/06/12/18Z), time first.
 
-Each cycle is cut to a fixed Bay Area window (``WINDOW_BOUNDS``: every field,
+Each cycle is cut to a fixed window (``settings.hrrr_bounds()``, the Bay Area by default: every field,
 leads 0-18) and kept under ``data/hrrr/window/``. Points anywhere inside it are
 then read from disk, so adding stations later costs no downloads. A cycle's
 chunks are ~20 MB on the wire; its window is a few hundred KB.
@@ -46,8 +46,6 @@ BASE_URL = "https://hrrrzarr.s3.amazonaws.com"
 CHUNK = 150
 K_NEIGHBOURS = 4
 FILL = -9999.0
-# Kept window (lat_min, lat_max, lon_min, lon_max): the MADIS network box plus SFO, Oakland and Marin.
-WINDOW_BOUNDS = (37.55, 37.95, -122.70, -122.15)
 WINDOW_MARGIN = 3  # cells beyond the bounds, so every point's 4 nearest cells are inside
 CACHE_LEADS = 18  # every cycle has f01-f18; the 48-hour cycles' later leads aren't kept
 
@@ -129,6 +127,13 @@ def point_neighbours(points: list[VirtualPoint], k: int = K_NEIGHBOURS) -> list[
     out = []
     for vp in points:
         px, py = _PROJ(vp.lon, vp.lat)
+        if not np.isfinite(px) or not np.isfinite(py):
+            raise ValueError(f"point {vp.point_id} ({vp.lat},{vp.lon}) has invalid HRRR coordinates")
+        if not (xs[0] <= px <= xs[-1] and ys[0] <= py <= ys[-1]):
+            raise ValueError(
+                f"point {vp.point_id} ({vp.lat},{vp.lon}) is outside the HRRR grid; "
+                "choose points within the configured HRRR domain"
+            )
         c0, r0 = int(round((px - xs[0]) / dx)), int(round((py - ys[0]) / dx))
         cands = [
             (float(np.hypot(xs[c] - px, ys[r] - py)), r, c)
@@ -136,6 +141,11 @@ def point_neighbours(points: list[VirtualPoint], k: int = K_NEIGHBOURS) -> list[
             for c in range(c0 - 2, c0 + 3)
             if 0 <= r < len(ys) and 0 <= c < len(xs)
         ]
+        if len(cands) < k:
+            raise ValueError(
+                f"point {vp.point_id} ({vp.lat},{vp.lon}) is outside the HRRR grid; "
+                "choose points within the configured HRRR domain"
+            )
         for rank, (dist, r, c) in enumerate(sorted(cands)[:k]):
             lon, lat = _PROJ(xs[c], ys[r], inverse=True)
             out.append(Neighbour(vp.point_id, rank, r, c, lat, (lon + 180) % 360 - 180, dist))
@@ -146,12 +156,11 @@ def _cycle_url(init: datetime, kind: str) -> str:
     return f"{BASE_URL}/sfc/{init:%Y%m%d}/{init:%Y%m%d_%H}z_{kind}.zarr"
 
 
-@cache
 def window() -> tuple[int, int, int, int]:
-    """Grid rows [r0, r1) and columns [c0, c1) covering ``WINDOW_BOUNDS`` plus the margin."""
+    """Grid rows [r0, r1) and columns [c0, c1) covering ``settings.hrrr_bounds()`` plus the margin."""
     xs, ys = grid_axes()
     dx = float(xs[1] - xs[0])
-    lat0, lat1, lon0, lon1 = WINDOW_BOUNDS
+    lat0, lat1, lon0, lon1 = settings.hrrr_bounds()
     rows, cols = [], []
     for lat in (lat0, lat1):
         for lon in (lon0, lon1):
@@ -159,7 +168,10 @@ def window() -> tuple[int, int, int, int]:
             cols.append(int(round((px - xs[0]) / dx)))
             rows.append(int(round((py - ys[0]) / dx)))
     m = WINDOW_MARGIN
-    return min(rows) - m, max(rows) + m + 1, min(cols) - m, max(cols) + m + 1
+    out = min(rows) - m, max(rows) + m + 1, min(cols) - m, max(cols) + m + 1
+    if out[0] < 0 or out[2] < 0 or out[1] > len(ys) or out[3] > len(xs):
+        raise ValueError(f"configured HRRR bounds {settings.hrrr_bounds()} plus margin exceed the HRRR grid")
+    return out
 
 
 def _read_window(url: str, with_time: bool) -> np.ndarray | None:
@@ -247,7 +259,9 @@ def fetch_cycle(
         raise ValueError(f"leads beyond f{CACHE_LEADS:02d} aren't kept in the window")
     r0, r1, c0, c1 = window()
     if outside := [c.point_id for c in cells if not (r0 <= c.row < r1 and c0 <= c.col < c1)]:
-        raise ValueError(f"points outside the kept window {WINDOW_BOUNDS}: {sorted(set(outside))}")
+        raise ValueError(
+            f"points outside the kept window (HRRR bounds {settings.hrrr_bounds()}): {sorted(set(outside))}"
+        )
     rows = np.array([c.row - r0 for c in cells])
     cols = np.array([c.col - c0 for c in cells])
     win = cycle_window(init)

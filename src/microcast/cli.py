@@ -331,6 +331,9 @@ def backtest_cmd(
     targets: str = typer.Option("t2m,gust", help="Comma-separated targets"),
     holdout: bool = typer.Option(False, help="Leave stations out instead (data/reports/holdout/ only)"),
     nbm: bool = typer.Option(False, help="Score NBM against the stored backtest instead (data/reports/nbm/ only)"),
+    holdout_stations: str | None = typer.Option(None, help="Comma-separated stations to hold out (requires --holdout)"),
+    start: str | None = typer.Option(None, help="Include cycles from this ISO UTC time"),
+    end: str | None = typer.Option(None, help="Exclude cycles at or after this ISO UTC time"),
 ) -> None:
     """Rolling monthly backtests -> gold.forecasts, gold.scores, MLflow, data/reports/."""
     from microcast.pipeline import run_backtests, run_holdout, run_nbm_comparison
@@ -339,9 +342,33 @@ def backtest_cmd(
         _print_board(run_nbm_comparison(models.split(","), log=typer.echo))
         return
     if holdout:
-        _print_board(run_holdout(models.split(","), targets.split(","), log=typer.echo))
+        selected = None
+        if holdout_stations is not None:
+            selected = [s.strip() for s in holdout_stations.split(",") if s.strip()]
+            if not selected:
+                raise typer.BadParameter(
+                    "must include at least one non-empty station ID", param_hint="--holdout-stations"
+                )
+        _print_board(
+            run_holdout(
+                models.split(","),
+                targets.split(","),
+                heldout_stations=selected,
+                start=_parse_init(start) if start else None,
+                end=_parse_init(end) if end else None,
+                log=typer.echo,
+            )
+        )
         return
-    board, _ = run_backtests(models.split(","), targets.split(","), log=typer.echo)
+    if holdout_stations is not None:
+        raise typer.BadParameter("--holdout-stations requires --holdout")
+    board, _ = run_backtests(
+        models.split(","),
+        targets.split(","),
+        start=_parse_init(start) if start else None,
+        end=_parse_init(end) if end else None,
+        log=typer.echo,
+    )
     _print_board(board)
 
 

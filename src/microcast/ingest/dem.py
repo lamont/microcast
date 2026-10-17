@@ -25,7 +25,7 @@ from microcast import settings
 
 EXPORT_URL = "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/exportImage"
 CELL_M = 10.0
-# UTM 10N box: the HRRR window (ingest.hrrr_zarr.WINDOW_BOUNDS) plus ~3 km, so the
+# UTM 10N box: the default HRRR window (settings.hrrr_bounds()) plus ~3 km, so the
 # upwind scans from points near its edges still see terrain.
 BOX = (524_000.0, 578_000.0, 4_153_000.0, 4_203_000.0)  # x0, x1, y0, y1
 TILE_M = 10_000.0
@@ -49,8 +49,38 @@ class Dem:
         from scipy.ndimage import map_coordinates
 
         x, y = _TO_UTM.transform(np.asarray(lon), np.asarray(lat))
+        self.validate_xy(x, y)
         r, c = self.rc(np.asarray(x), np.asarray(y))
         return map_coordinates(self.z, [r, c], order=1, mode="nearest")
+
+    def validate_xy(self, x: np.ndarray, y: np.ndarray) -> None:
+        box = (
+            self.x0,
+            self.x0 + self.z.shape[1] * self.cell,
+            self.y1 - self.z.shape[0] * self.cell,
+            self.y1,
+        )
+        validate_xy(x, y, box, source="cached DEM")
+
+
+def validate_xy(
+    x: np.ndarray,
+    y: np.ndarray,
+    box: tuple[float, float, float, float] = BOX,
+    *,
+    source: str = "built-in DEM builder",
+) -> None:
+    """Reject nonfinite or out-of-bounds projected coordinates."""
+    x_min, x_max, y_min, y_max = box
+    outside = ~np.isfinite(x) | ~np.isfinite(y) | (x < x_min) | (x > x_max) | (y < y_min) | (y > y_max)
+    if np.any(outside):
+        raise ValueError(f"terrain point is outside the {source} bounds")
+
+
+def validate_points(lat: np.ndarray, lon: np.ndarray) -> None:
+    """Validate WGS84 points before attempting to load or fetch the DEM."""
+    x, y = _TO_UTM.transform(np.asarray(lon), np.asarray(lat))
+    validate_xy(np.asarray(x), np.asarray(y))
 
 
 def _fetch(box: tuple[float, float, float, float], cell: float) -> np.ndarray:
