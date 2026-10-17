@@ -130,6 +130,19 @@ backfill madis --start 2025-04-01` (resumable; streams ~30 MB per hour of data
 and keeps the SF box). To move the lake to the cluster: `microcast lake copy --to <catalog>`,
 then rebuild silver and gold there (decisions D11).
 
+Container image: CI tests every push and PR, and on `main` publishes a
+multi-arch (amd64 + arm64) image to `ghcr.io/lamont/microcast` tagged with
+the short commit and `latest`. `deploy/docker/publish.sh [tag…]` does the same
+from the laptop. The image's entrypoint is `microcast`; the lake lives in the
+`/data` volume, and keys and coordinates come from the environment:
+
+```sh
+docker run --rm --env-file .env ghcr.io/lamont/microcast:latest points
+```
+
+The laptop's `data/` can't simply be mounted there: its Iceberg metadata
+holds absolute laptop paths, so a lake for the image is made with `lake copy`.
+
 Each ingest batch appends new Parquet files and a new Iceberg snapshot to
 `bronze`, which is append-only. Silver and gold rebuild whole partitions into
 fewer, larger files. To move from local disk to Lakekeeper and S3/MinIO, set
@@ -160,6 +173,8 @@ src/microcast/
   site/            static status site (weather.henry.st)
   cli.py           `microcast …`
 tests/             offline tests (synthetic pick_points output, temp catalogs)
+deploy/docker/     Dockerfile (multi-arch image) and publish.sh (laptop -> GHCR)
+.github/workflows/ ci.yml: lint + tests, then build and push the image on main
 docs/              design, decisions, specs
 ```
 

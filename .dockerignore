@@ -1,0 +1,20 @@
+# Only source, config and the lockfile go into the build context.
+.git
+.github
+.venv
+.idea
+.pytest_cache
+.ruff_cache
+**/__pycache__
+data/
+site/
+docs/
+tests/
+mlruns/
+mlartifacts/
+.env
+config/*.local.yaml
+routes/private/
+*.grib2
+*.idx
+.DS_Store
