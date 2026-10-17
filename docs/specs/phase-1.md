@@ -138,10 +138,23 @@ Evening session (2026-10-06):
 5. Data quality, the general version: a per-station check against
    neighbours and HRRR that would have caught GGBC1 (stuck values, mirrored
    or rotated vanes) without a hand-kept list.
-6. Dagster on the laptop (`dagster dev`), when picked back up: the ingest,
-   backfill and build commands as partitioned assets with schedules and
-   per-table concurrency pools, declared in `defs.yaml` where possible (D12);
-   then Postgres and the `dagster/dagster` Helm chart on the swarm cluster.
+6. Dagster on k3s (D12), picked back up 2026-10-16. Done: one multi-arch
+   (amd64 + arm64) image, `deploy/docker/Dockerfile`, built by CI and pushed to
+   `ghcr.io/lamont/microcast` on `main` (`deploy/docker/publish.sh` from the
+   laptop); mirroring it to the Gitea registry at gitea.henry.st comes later.
+   Then, in order:
+   1. Postgres on k3s as the Iceberg catalog (PyIceberg's SQL catalog), a
+      volume for the warehouse, and the lake moved with `lake copy` (D11): the
+      laptop's Iceberg metadata holds absolute laptop paths, so its `data/`
+      can't simply be mounted.
+   2. One plain k8s Job, `microcast ingest synoptic`, to prove the image,
+      secrets, catalog and storage before Dagster (and to take the weekly
+      Synoptic pull off the laptop).
+   3. Dagster: `dagster dev` on the laptop with the ingest, backfill and build
+      commands as partitioned assets, schedules and per-table concurrency
+      pools, declared in `defs.yaml` where possible; then the
+      `dagster/dagster` Helm chart with this image as the user-code
+      deployment.
 7. ~~A leaner PurpleAir feature set (the two transect summaries only) against
    the 32-feature version.~~ Moot: the transect ingest was removed 2026-10-16.
 8. Backyard station (D5); confirm the model first.

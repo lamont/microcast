@@ -36,6 +36,8 @@ def _mlflow():
 
 
 def _git_sha() -> str:
+    if sha := os.environ.get("MICROCAST_GIT_SHA"):  # set in the image, which has no .git
+        return sha
     try:
         out = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, cwd=settings.REPO_ROOT
