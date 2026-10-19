@@ -13,6 +13,8 @@ const KNOWN = {
   gbm_residual: { label: "GBM residual", slot: 1 },
   bias_rolling: { label: "Rolling bias", slot: 2 },
   gbm_purpleair: { label: "GBM + PurpleAir", slot: 3 },
+  gbm_terrain: { label: "GBM terrain", slot: 4 },
+  gbm_terrain_stack: { label: "GBM terrain stack (champion)", slot: 5 },
 };
 const MODELS = {};
 let ORDER = []; // every model in the data: raw_hrrr first, then by color slot

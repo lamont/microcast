@@ -57,8 +57,8 @@ kept or rejected, are in the [phase 1 spec](docs/specs/phase-1.md)
 Without a station at the point (the house, the ride), skill is much lower,
 around +10-12% for temperature and +22-24% for gust. For those points the regime
 and upwind inputs help temperature. For gust, upwind helps there but regime
-doesn't. The live forecast and the status site still run `gbm_terrain`, until
-they're switched over.
+doesn't. The status site shows it (rolling backtest of 2026-10-18); the live
+forecast command, still to be built (spec Next #4), will start on it.
 
 ## What exists today vs. what's planned
 

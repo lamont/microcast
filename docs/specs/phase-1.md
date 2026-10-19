@@ -120,9 +120,10 @@ Done this session, details in the sections below:
   `regime`, `net1-regime`, `lag`, `net1-lag`); window cache now 3.3 GB. Silver
   and gold rebuilt (gold `400097479855311500`, 3,383,856 rows; upwind
   features 269,527 rows).
-- **RRFS:** `backfill rrfs` collecting from 2026-08-13 (D13). A handful of
-  cycles fail with no `.idx` (all of 08-13 and a few later hours) or a
-  dropped connection; rerunning retries them.
+- **RRFS:** `backfill rrfs` backfilled 2026-08-13 → 2026-10-18 23Z (D13):
+  1,604 of 1,608 cycles, 18.2M rows. Four hours have no `.idx` on S3
+  (2026-08-13 17Z, 09-14 17Z and 21Z, 09-15 04Z) and stay missing; dropped
+  connections are retried by a rerun.
 - **Storage:** bronze metadata pruned (last 10 versions per table, properties
   set by `init_lake`); 2,087 orphaned metadata.json files
   (2.6 GB) deleted. Old silver/gold snapshots not yet expired.
@@ -177,6 +178,7 @@ which commit restores it. Details live in the dated sections further down.
 | 9 | REFS ceiling probabilities (< 152-3050 m) for the marine-layer target (D2) | Ensemble odds of low ceiling, every 6 h | waiting: RRFS history, and the cloud target |
 | 10 | NBM benchmark rerun | NBM swaps NAM/HiresW for RRFS/REFS on 11-03 (SCN 26-89) | waiting: 2026-12 |
 | 11 | GOES-18 low-cloud / clear-sky mask | The best fog-edge signal there is | later (phase 3) |
+| 12 | Weather Underground stations as truth stations (`wu` source: current obs + history by date), starting with a friend's station near Corona Heights (id and position in `.env`, alias only in git and on the site) | More stations with their own obs in the city; it isn't on CWOP/MADIS | waiting: our own WU API key, once the backyard station (D5) is on WU |
 
 ## Next
 

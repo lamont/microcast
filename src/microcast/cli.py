@@ -370,7 +370,10 @@ def build_static() -> None:
 
 @app.command("backtest")
 def backtest_cmd(
-    models: str = typer.Option("raw_hrrr,bias_rolling,gbm_residual,gbm_purpleair", help="Comma-separated model names"),
+    models: str = typer.Option(
+        "raw_hrrr,bias_rolling,gbm_residual,gbm_purpleair,gbm_terrain,gbm_terrain_stack",
+        help="Comma-separated model names",
+    ),
     targets: str = typer.Option("t2m,gust", help="Comma-separated targets"),
     holdout: bool = typer.Option(False, help="Leave stations out instead (data/reports/holdout/ only)"),
     nbm: bool = typer.Option(False, help="Score NBM against the stored backtest instead (data/reports/nbm/ only)"),
