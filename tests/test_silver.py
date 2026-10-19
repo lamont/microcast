@@ -102,3 +102,21 @@ def test_station_faults_flagged_and_mirrored_vane_fixed():
     assert got[("GGBC1", "wdir10")] == (250.0, "ok")
     assert got[("GGBC1", "gust")] == (11.0, "ok")
     assert got[("FTPC1", "wdir10")] == (116.0, "ok")  # other stations untouched
+
+
+def test_regime_fields_pivoted_rotated_and_in_celsius():
+    lon = -122.43
+    b = _nwp([
+        dict(variable="t", level="isobaricInhPa:925", k=0, value=293.15),
+        dict(variable="t", level="isobaricInhPa:850", k=0, value=295.15),
+        dict(variable="u", level="isobaricInhPa:925", k=0, value=0.0, grid_lon=lon),
+        dict(variable="v", level="isobaricInhPa:925", k=0, value=10.0, grid_lon=lon),
+        dict(variable="blh", level="surface", k=0, value=400.0),
+    ])  # fmt: skip
+    row = silver.build_nwp_aligned(b).to_pylist()[0]
+    assert row["t925"] == pytest.approx(20.0) and row["t850"] == pytest.approx(22.0)
+    assert row["hpbl"] == pytest.approx(400.0)
+    # Rotated like the 10 m wind: same speed, turned by the grid's convergence angle.
+    ang = math.radians(silver.HRRR_ROTCON * (lon - silver.HRRR_LOV))
+    assert row["u925"] == pytest.approx(10.0 * math.sin(ang))
+    assert row["v925"] == pytest.approx(10.0 * math.cos(ang))

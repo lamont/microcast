@@ -67,6 +67,14 @@ def load_gold(model_names: list[str], log: Callable[[str], None] = print) -> tup
         feats = network.wide(net.scan(snapshot_id=snapshots["network"]).to_arrow())
         gold = gold.merge(feats, on="init_time", how="left")  # same values at every point of a cycle
         log(f"gold.network_features @ {snapshots['network']}: {feats.shape[1] - 1} features, {len(feats)} cycles")
+    if "upwind" in needs:
+        from microcast.transform import network
+
+        up = catalog.load_table("gold.upwind_features")
+        snapshots["upwind"] = up.current_snapshot().snapshot_id
+        feats = network.wide(up.scan(snapshot_id=snapshots["upwind"]).to_arrow())
+        gold = gold.merge(feats, on="init_time", how="left")
+        log(f"gold.upwind_features @ {snapshots['upwind']}: {feats.shape[1] - 1} features, {len(feats)} cycles")
     if "static" in needs:
         from microcast.transform import static
 

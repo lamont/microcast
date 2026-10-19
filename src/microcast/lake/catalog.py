@@ -32,6 +32,12 @@ from microcast.lake.schemas import TABLES, TableDef
 CATALOG_NAME = "microcast"
 NAMESPACES = ("bronze", "silver", "gold")
 TABLE_PROPERTIES = {"write.parquet.compression-codec": "zstd", "format-version": "2"}
+# Every commit writes a new metadata.json listing all snapshots (bronze's carry their batch ids,
+# so each is MBs); keep only the last few. Snapshots themselves stay, in the current one.
+METADATA_PROPERTIES = {
+    "write.metadata.delete-after-commit.enabled": "true",
+    "write.metadata.previous-versions-max": "10",
+}
 
 
 def local_catalog_properties() -> dict[str, str]:
@@ -52,7 +58,11 @@ def get_catalog() -> Catalog:
 
 
 def init_lake(catalog: Catalog | None = None, tables: list[TableDef] = TABLES) -> list[str]:
-    """Create namespaces and any missing tables. Safe to rerun."""
+    """Create namespaces and any missing tables, add columns new to a schema, set table properties.
+
+    Columns are only ever added (Iceberg schema evolution, by name): old data
+    files read them as null until the table is rebuilt. Safe to rerun.
+    """
     catalog = catalog or get_catalog()
     for ns in NAMESPACES:
         try:
@@ -62,9 +72,17 @@ def init_lake(catalog: Catalog | None = None, tables: list[TableDef] = TABLES) -
     created = []
     for t in tables:
         try:
-            catalog.load_table(t.identifier)
+            table = catalog.load_table(t.identifier)
+            if set(t.schema.column_names) - set(table.schema().column_names):
+                with table.update_schema() as update:
+                    update.union_by_name(t.schema)
+            if any(table.properties.get(k) != v for k, v in METADATA_PROPERTIES.items()):
+                with table.transaction() as tx:
+                    tx.set_properties(METADATA_PROPERTIES)
         except NoSuchTableError:
-            catalog.create_table(t.identifier, schema=t.schema, partition_spec=t.spec, properties=TABLE_PROPERTIES)
+            catalog.create_table(
+                t.identifier, schema=t.schema, partition_spec=t.spec, properties=TABLE_PROPERTIES | METADATA_PROPERTIES
+            )
             created.append(t.identifier)
     return created
 

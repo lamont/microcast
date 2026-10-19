@@ -64,7 +64,38 @@ VARIABLES: dict[tuple[str, str], tuple[str, str]] = {
     ("entire_atmosphere", "TCDC"): ("tcc", "atmosphere:0"),
     ("cloud_base", "HGT"): ("gh", "cloudBase:0"),
     ("cloud_ceiling", "HGT"): ("gh", "cloudCeiling:0"),
+    # Regime: the marine layer's lid and the flow above it. 925 mb sits near 750 m, above
+    # most summer marine layers, so t925 - t2m is the inversion's strength and the 925 mb
+    # wind is onshore vs offshore flow; HRRR's PBL height stands in for the layer's depth.
+    ("925mb", "TMP"): ("t", "isobaricInhPa:925"),
+    ("850mb", "TMP"): ("t", "isobaricInhPa:850"),
+    ("925mb", "UGRD"): ("u", "isobaricInhPa:925"),
+    ("925mb", "VGRD"): ("v", "isobaricInhPa:925"),
+    ("surface", "HPBL"): ("blh", "surface"),
 }
+REGIME = [("925mb", "TMP"), ("850mb", "TMP"), ("925mb", "UGRD"), ("925mb", "VGRD"), ("surface", "HPBL")]
+# Named subsets for a pass that adds fields to cycles already in bronze (``--variables``).
+GROUPS: dict[str, list[tuple[str, str]]] = {
+    "surface": [k for k in VARIABLES if k not in REGIME],
+    "regime": REGIME,
+}
+
+
+def select(spec: str | None) -> list[tuple[str, str]]:
+    """Variables from a comma list of group names and/or short names (``regime``, ``t2m,gust``)."""
+    if not spec:
+        return list(VARIABLES)
+    out: list[tuple[str, str]] = []
+    for part in (p.strip() for p in spec.split(",") if p.strip()):
+        if part in GROUPS:
+            keys = GROUPS[part]
+        else:
+            keys = [k for k, (name, level) in VARIABLES.items() if part in (name, f"{k[0]}/{k[1]}")]
+            if not keys:
+                raise ValueError(f"unknown HRRR variable or group {part!r}")
+        out += [k for k in keys if k not in out]
+    return out
+
 
 # HRRR's Lambert conformal grid on a sphere, as published in grid/projparams.json.
 _PROJ = Proj(proj="lcc", a=6371229, b=6371229, lon_0=262.5, lat_0=38.5, lat_1=38.5, lat_2=38.5)
@@ -206,20 +237,25 @@ def tile_path(init: datetime) -> Path:
     return settings.data_dir() / "hrrr" / "window" / f"{init:%Y/%m/%d}" / f"{init:%Y%m%d%H}.npz"
 
 
-def cycle_window(init: datetime) -> dict[str, np.ndarray]:
-    """Every field over the window for one cycle, (CACHE_LEADS + 1, rows, cols); index 0 is the analysis.
+def cycle_window(init: datetime, variables: list[tuple[str, str]] | None = None) -> dict[str, np.ndarray]:
+    """Fields over the window for one cycle, (CACHE_LEADS + 1, rows, cols); index 0 is the analysis.
 
-    Read from the local copy when there is one, else fetched from the archive
-    and kept. Raises ``CycleMissing`` if the archive lacks any field.
+    Read from the local copy when it has them; any it lacks are fetched from
+    the archive and added to it, so a field added to ``VARIABLES`` later costs
+    only its own chunks. Raises ``CycleMissing`` if the archive lacks a field.
     """
+    wanted = variables or list(VARIABLES)
     path = tile_path(init)
+    out: dict[str, np.ndarray] = {}
     if path.exists():
         with np.load(path) as z:
             if tuple(z["window"]) == window():
-                return {k: z[k] for k in z.files if k != "window"}
+                out = {k: z[k] for k in z.files if k != "window"}
+    todo = [(level, var) for level, var in wanted if _key(level, var) not in out]
+    if not todo:
+        return out
     r0, r1, c0, c1 = window()
-    out = {}
-    for level, var in VARIABLES:
+    for level, var in todo:
         anl = _read_window(f"{_cycle_url(init, 'anl')}/{level}/{var}/{level}/{var}", with_time=False)
         if anl is None:
             raise CycleMissing(f"{init:%Y-%m-%dT%HZ} anl {level}/{var}")
@@ -246,9 +282,10 @@ def fetch_cycle(
     model: str = "hrrr",
     product: str = "sfc",
     tag: str | None = None,
+    variables: list[tuple[str, str]] | None = None,
     ingested_at: datetime | None = None,
 ) -> pa.Table:
-    """One cycle's requested leads at every neighbour cell, as bronze.nwp_point rows.
+    """One cycle's requested leads and variables (default all) at every neighbour cell, as bronze rows.
 
     Raises ``CycleMissing`` if the archive lacks any field for the cycle, so a
     partial cycle is never written and a rerun retries it.
@@ -264,9 +301,11 @@ def fetch_cycle(
         )
     rows = np.array([c.row - r0 for c in cells])
     cols = np.array([c.col - c0 for c in cells])
-    win = cycle_window(init)
+    variables = variables or list(VARIABLES)
+    win = cycle_window(init, variables)
     frames = []
-    for (level, var), (name, level_label) in VARIABLES.items():
+    for level, var in variables:
+        name, level_label = VARIABLES[level, var]
         arr = win[_key(level, var)]
         per_lead = {h: arr[h, rows, cols].astype("float64") for h in leads}
         for h, v in per_lead.items():
@@ -334,14 +373,17 @@ def backfill(
     model: str = "hrrr",
     points: list[VirtualPoint] | None = None,
     tag: str | None = None,
+    variables: list[tuple[str, str]] | None = None,
     log=print,
 ) -> dict[str, int]:
     """Fetch every missing cycle in [start, end) and append to bronze.nwp_point.
 
-    By default the points are the registry's. A points-only pass (``points``
-    plus a ``tag`` naming that set) records its own batch ids, so it covers
-    cycles the registry pass already did; with the window kept on disk it
-    reads no network for those cycles.
+    By default the points are the registry's and the variables are all of
+    ``VARIABLES``. A pass over other points (``points``) or a subset of the
+    variables (``variables``, e.g. fields added after the cycles were first
+    loaded) needs a ``tag`` naming it: it records its own batch ids, so it
+    covers cycles an earlier pass already did. With the window kept on disk
+    it reads the network only for fields the window lacks.
 
     Cycles already recorded in bronze snapshot summaries are skipped, so this
     is safe to interrupt and rerun. Archive gaps are logged and left for a
@@ -352,6 +394,8 @@ def backfill(
 
     from microcast.lake.catalog import append_bronze, recorded_batches
 
+    if (points is not None or variables is not None) and not tag:
+        raise ValueError("a pass over other points or a subset of variables needs a tag")
     done = recorded_batches("bronze.nwp_point")
     todo = [c for c in cycles(start, end, stride_h) if batch_id(model, c, tag) not in done]
     stats = {"skipped": 0, "fetched": 0, "missing": 0, "rows": 0}
@@ -373,7 +417,9 @@ def backfill(
             pending_ids.clear()
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(fetch_cycle, c, cells, leads, model=model, tag=tag): c for c in todo}
+        futures = {
+            pool.submit(fetch_cycle, c, cells, leads, model=model, tag=tag, variables=variables): c for c in todo
+        }
         for fut in as_completed(futures):
             init = futures[fut]
             try:

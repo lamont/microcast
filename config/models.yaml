@@ -11,9 +11,10 @@ hrrr:
   cadence_h: 1
   leads: [0, 18, 1]
   # Low/total cloud cover and cloud base/ceiling drive the marine-layer
-  # (low-cloud onset) target; see docs/decisions.md D2.
+  # (low-cloud onset) target; see docs/decisions.md D2. 925/850 mb temperature,
+  # 925 mb wind and PBL height are the regime fields (the marine layer's lid).
   search: >-
-    :(?:TMP|DPT|RH):2 m above|:(?:UGRD|VGRD):10 m above|:GUST:surface|:PRATE:surface|:VIS:surface|:HGT:cloud (?:base|ceiling)|:LCDC:low cloud layer|:TCDC:entire atmosphere|:DSWRF:surface
+    :(?:TMP|DPT|RH):2 m above|:(?:UGRD|VGRD):10 m above|:GUST:surface|:PRATE:surface|:VIS:surface|:HGT:cloud (?:base|ceiling)|:LCDC:low cloud layer|:TCDC:entire atmosphere|:DSWRF:surface|:TMP:(?:925|850) mb|:(?:UGRD|VGRD):925 mb|:HPBL:surface
 
 hrrr_subh:
   enabled: false # phase 1 uses hourly sfc; turn on for onset timing
@@ -33,8 +34,10 @@ gfs:
   search: >-
     :HGT:500 mb|:PRMSL:|:(?:UGRD|VGRD|TMP|RH):850 mb
 
+# RRFS is collected by `microcast backfill rrfs` (ingest/rrfs.py, D13), not through
+# this generic path; these entries stay for a later live GRIB asset.
 rrfs:
-  enabled: false # operational from Oct 2026; history too short to train on alone
+  enabled: false # operational 2026-11-03; history too short to train on alone
   herbie_model: rrfs
   product: subh
   cadence_h: 1
@@ -53,6 +56,8 @@ rrfs_ens:
   search: >-
     :(?:TMP|DPT):2 m above|:(?:UGRD|VGRD):10 m above|:GUST:surface
 
+# REFS (not collected, D13): `prob` has ceiling, visibility, dewpoint, rain and 10 m wind
+# exceedances (no gust); `mean`/`sprd` have T2m, 10 m wind, low cloud and 925/850 mb.
 refs:
   enabled: false
   herbie_model: refs

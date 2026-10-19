@@ -3,8 +3,9 @@
 * ``silver.obs_qc``: latest ``ingested_at`` per natural key, range checks, and
   fixes for known station faults (``STATION_FAULTS``, ``MIRRORED_VANES``).
 * ``silver.nwp_aligned``: one wide row per (model, cycle, lead, point). The 4
-  neighbour cells are combined by inverse-distance weighting; u/v are rotated
-  from HRRR's grid-relative frame to earth-relative per cell first.
+  neighbour cells are combined by inverse-distance weighting; u/v (10 m and
+  925 mb) are rotated from HRRR's grid-relative frame to earth-relative per
+  cell first.
 
 Both are rebuilt a month at a time (``overwrite`` with a time-range filter),
 which is also what compacts bronze's many small files into a few large ones.
@@ -95,13 +96,16 @@ named AS (
             WHEN variable = 'gh' AND level = 'cloudCeiling:0' THEN 'ceiling'
             WHEN variable = 'r2' THEN 'rh2m'
             WHEN variable = 'sdswrf' THEN 'dswrf'
+            WHEN variable IN ('t', 'u', 'v') AND level LIKE 'isobaricInhPa:%'
+                THEN variable || replace(level, 'isobaricInhPa:', '')
+            WHEN variable = 'blh' THEN 'hpbl'
             ELSE variable
         END AS field
     FROM latest
 ),
 cell AS (
     PIVOT named ON field IN ('t2m', 'd2m', 'rh2m', 'u10', 'v10', 'gust', 'prate', 'vis', 'lcc', 'tcc',
-                             'cloud_base', 'ceiling', 'dswrf')
+                             'cloud_base', 'ceiling', 'dswrf', 't925', 't850', 'u925', 'v925', 'hpbl')
     USING first(value)
     GROUP BY model, init_time, lead_min, valid_time, point_id, k, grid_lon, grid_dist_m
 ),
@@ -110,6 +114,8 @@ earth AS (
         radians({HRRR_ROTCON} * (grid_lon - ({HRRR_LOV}))) AS ang,
         cos(ang) * u10 + sin(ang) * v10 AS ue,
         -sin(ang) * u10 + cos(ang) * v10 AS ve,
+        cos(ang) * u925 + sin(ang) * v925 AS ue925,
+        -sin(ang) * u925 + cos(ang) * v925 AS ve925,
         1.0 / greatest(grid_dist_m, 100.0) AS w
     FROM cell
 ),
@@ -129,6 +135,11 @@ idw AS (
         sum(w * cloud_base) / sum(w) FILTER (WHERE cloud_base IS NOT NULL) AS cloud_base,
         sum(w * ceiling) / sum(w) FILTER (WHERE ceiling IS NOT NULL) AS ceiling,
         sum(w * dswrf) / sum(w) FILTER (WHERE dswrf IS NOT NULL) AS dswrf,
+        sum(w * (t925 - 273.15)) / sum(w) FILTER (WHERE t925 IS NOT NULL) AS t925,
+        sum(w * (t850 - 273.15)) / sum(w) FILTER (WHERE t850 IS NOT NULL) AS t850,
+        sum(w * ue925) / sum(w) FILTER (WHERE ue925 IS NOT NULL) AS u925,
+        sum(w * ve925) / sum(w) FILTER (WHERE ve925 IS NOT NULL) AS v925,
+        sum(w * hpbl) / sum(w) FILTER (WHERE hpbl IS NOT NULL) AS hpbl,
         max(t2m) - min(t2m) AS t2m_spread,
         max(gust) - min(gust) AS gust_spread
     FROM earth

@@ -110,6 +110,74 @@ Evening session (2026-10-06):
   The crosswind work is exploratory: its numbers are in the bridge section
   below, the scripts were not kept.
 
+## Handoff (2026-10-18)
+
+Done this session, details in the sections below:
+
+- **Regime, lagged, upwind:** all adopted; together as `gbm_terrain_stack`
+  (+2-3 points of temperature skill, +1 of gust). HRRR backfilled 2025-04 →
+  2026-10-17 17Z with the regime fields and leads 7-12 of t2m/gust (tags
+  `regime`, `net1-regime`, `lag`, `net1-lag`); window cache now 3.3 GB. Silver
+  and gold rebuilt (gold `400097479855311500`, 3,383,856 rows; upwind
+  features 269,527 rows).
+- **RRFS:** `backfill rrfs` collecting from 2026-08-13 (D13). A handful of
+  cycles fail with no `.idx` (all of 08-13 and a few later hours) or a
+  dropped connection; rerunning retries them.
+- **Storage:** bronze metadata pruned (last 10 versions per table, properties
+  set by `init_lake`); 2,087 orphaned metadata.json files
+  (2.6 GB) deleted. Old silver/gold snapshots not yet expired.
+- **Catch-up:** `data/logs/catchup-2026-10-18.sh` replaces the 10-17 script:
+  default HRRR pass (regime included), the two lag passes, then RRFS.
+- Not committed.
+
+Next up: make `gbm_terrain_stack` the default in live inference and the
+site (Next #4); the lagged ensemble held out; then queue #5 (`xgust`).
+
+## Experiments: tried and queued
+
+Every forecasting experiment gets a row here when it starts, and its verdict
+when it ends. Failed ones keep their row: the code goes, and the row says
+which commit restores it. Details live in the dated sections further down.
+
+**Tried.** Skill is CRPS skill vs raw HRRR at 1-3 h / 4-6 h unless noted.
+
+| Date | Experiment | Result | Verdict |
+| --- | --- | --- | --- |
+| 10-05 | GBM residual vs raw HRRR (`gbm_residual`), 4 stations | temp +41% / +30%, gust +25% / +21% | Adopted: the phase 1 gate |
+| 10-05 | GBM fitted on top of `bias_rolling` | ~+1 point, inside the CI | Not adopted |
+| 10-05 | Hourly cycles instead of every third | under 1 point, narrower CIs | Kept hourly |
+| 10-06 | Train on the 36-station MADIS network | gust +5 points at the original four | Adopted |
+| 10-06 | PurpleAir transect changes (`gbm_purpleair`) | temp CRPS -1.2 to -1.7%, gust 0 | Model kept frozen; ingest removed 10-16 (cost), restorable from e28a5e2 |
+| 10-06 | Terrain in place of the station id (`gbm_terrain`) | ties on known stations, +4-5 points unseen | Adopted as the default |
+| 10-06 | HRRR 80 m wind for bridge crosswind | r 0.68 vs 0.69 for 10 m; no gain | Rejected, never backfilled |
+| 10-06 | Bridge crosswind gust GBM at GGBC1 | +19% / +16%, Brier 0.051 vs 0.063 | Promising; `xgust` in gold is Next #3 |
+| 10-07 | Neighbour obs (`gbm_nwp_neighbours`) | no-own-obs temp +3.5 points, gust -2 | Temperature only (Next #2) |
+| 10-11 | HRRR's 4 cells kept apart | no change beyond the CIs | Removed; restorable from be498f1 |
+| 10-12 | NBM as a benchmark | NBM +2-6% vs raw; ours 31-54% lower CRPS than NBM | Benchmark only; rerun after NBM takes RRFS (11-03) |
+| 10-18 | Regime features: inversion, 925 mb flow, PBL height (`gbm_*_regime`) | own obs: temp -0.9% / -2.5%, gust -0.9% / -1.1%; held out: temp -4.6% / -4.8%, gust 0 (split by station) | Adopted; not for gust without own obs |
+| 10-18 | Time-lagged HRRR ensemble, as features and as sigma (`gbm_terrain_lagged*`) | features: -0.4 to -0.8%; spread as sigma a further -0.3 to -0.9%, coverage unchanged | Adopted |
+| 10-18 | Does the coast's push travel inland? (MADIS, event odds) | ridge x6 at 75-90 min, east side x2-3 at 1.5-3.5 h; loose timing past the ridge | Real signal; built as `up_*` features |
+| 10-18 | Same, as continuous 30-min changes (lagged correlation) | r 0.1-0.2, peak at 0-20 min | No wave to track at 10-min scale; use events and group changes |
+| 10-18 | Upwind features in the GBM (`gbm_*_upwind`) | own obs: temp -1.4% / -1.7%, gust 0; held out: temp -3.0% / -2.5%, gust -1.2% / -1.0%; SFOC1 held out -5.6% / -6.4% | Adopted for temperature |
+| 10-18 | All three together (`gbm_terrain_stack`) | they add up: skill temp +48.6/+35.4% → +50.6/+38.4%, gust +55.3/+51.8% → +56.1/+52.8% | Adopted: candidate default for points with own obs |
+
+**Queued**, in order. Status: *running*, *next*, *later*, *waiting* (on data or a date).
+
+| # | Experiment | Why | Status |
+| --- | --- | --- | --- |
+| 1 | Regime features (marine layer lid, onshore flow, PBL depth) | Errors learnt per regime, not per place; aimed at no-own-obs temperature and 4-6 h | done 10-18: adopted (see "Regime features") |
+| 2 | Time-lagged HRRR ensemble (6 earlier cycles) | A weather-dependent spread for sigma, and run-to-run trend; no downloads | done 10-18: adopted; held-out test still to do |
+| 3 | RRFS: collect at our points | HRRR's successor; history only accrues | collecting since 10-18; compare from 2027-04 (see "RRFS: collecting, not using") |
+| 4 | Upwind changes from MADIS/Synoptic stations, and how they travel across the city | What the PurpleAir transect gave, from stations we already pull for free; does the fog edge follow Twin Peaks and Corona Heights? | done 10-18: adopted (see "Upwind changes") |
+| 4a | Upwind, per point: weight the push by each point's own path (stations to its west, its shelter) instead of three city-wide groups | Timing past the ridge varies 95-220 min within a neighbourhood; city-wide groups can't say which pocket gets it when | later |
+| 5 | Bridge crosswind gust target (`xgust`) and P(> 9 m/s) | The ride's main question | next (Next #3) |
+| 6 | RTMA-RU (2.5 km, 15 min) as a stand-in for a point's own obs | Own obs carry most of the skill; RTMA gives every point an analysed "now". Leaks in holdouts (it assimilates MADIS), so judge on the backyard station | later |
+| 7 | Synoptic pressure gradient (SFO minus Sacramento, HRRR) | The classic sea-breeze and fog-push predictor; needs a point outside the kept window | later |
+| 8 | Analog ensemble over HRRR + obs | A calibrated challenger to the Gaussian sigma | later |
+| 9 | REFS ceiling probabilities (< 152-3050 m) for the marine-layer target (D2) | Ensemble odds of low ceiling, every 6 h | waiting: RRFS history, and the cloud target |
+| 10 | NBM benchmark rerun | NBM swaps NAM/HiresW for RRFS/REFS on 11-03 (SCN 26-89) | waiting: 2026-12 |
+| 11 | GOES-18 low-cloud / clear-sky mask | The best fog-edge signal there is | later (phase 3) |
+
 ## Next
 
 1. Synoptic: `microcast ingest synoptic` at least weekly (the free tier keeps
@@ -163,8 +231,220 @@ Evening session (2026-10-06):
 
 ## Not in phase 1
 
-Docker Compose (skipped, D12), MinIO/Lakekeeper, RRFS/REFS ingest, alerts.
+Docker Compose (skipped, D12), MinIO/Lakekeeper, REFS ingest, RRFS as a model
+input (it is collected from 2026-10-18, D13), alerts.
 Dagster moves into phase 1 as the scheduler (D12).
+
+## Upwind changes: how the marine push crosses the city (2026-10-18)
+
+Question: the PurpleAir transect's small gain came from temperature drops
+and RH jumps moving inland from Ocean Beach. Do the MADIS stations we pull
+for free show the same push, and does it follow the terrain (Twin Peaks,
+Corona Heights)?
+
+Data: 10-minute t2m and RH at the MADIS/Synoptic stations, May-Oct 2025 and
+2026, 11:00-22:59 local. A **push** at a station: temperature down 2 C and RH
+up 8 points within an hour; its onset is the first such 10 minutes of the
+day. Coast = 604PG, D5422 (west end of Golden Gate Park), AV684, F8022
+(Pacifica); 36 afternoons had a coastal push. Scripts (not in git):
+`data/logs/upwind-explore/`.
+
+**Odds of a push inland after one at the coast**, against afternoons with
+none at the coast, and the median delay:
+
+| Station | Where | km east | Elev. | P(push), no coast push | P(push), after one | Lift | Median delay |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| PG800 | Daly City hills | 3.0 | 86 m | 0.10 | 0.61 | x6.4 | 75 min |
+| 070PG | Twin Peaks south ridge | 5.8 | 164 m | 0.10 | 0.61 | x5.9 | 90 min |
+| C5988 | Castro | 6.7 | 46 m | 0.15 | 0.34 | x2.3 | 95 min |
+| F4637 | Hayes Valley / Duboce | 7.5 | 17 m | 0.18 | 0.51 | x2.8 | 155 min |
+| G3010 | Bernal / Mission | 8.6 | 46 m | 0.20 | 0.56 | x2.8 | 190 min |
+| E5830 | Glen Park | 6.8 | 79 m | 0.15 | 0.42 | x2.8 | 220 min |
+| E9227 | Corona Heights east | 6.3 | 110 m | 0.18 | 0.33 | x1.9 | 205 min |
+| 438PG | Bayview | 11.0 | 5 m | 0.18 | 0.61 | x3.3 | 130 min |
+| PG733, PG521, AU915 | Marin | | | | | x0.4-1.3 | |
+
+* **Yes, it travels, and the first ridge is the gate.** The Daly City gap and
+  Twin Peaks' south ridge see it 75-90 min after the coast, with six times
+  the usual odds. The east side follows 1.5-3.5 h after the coast at two to
+  three times the odds. Marin, on another path, gets no lift.
+* **Timing past the ridge is loose.** Delay vs distance east r = 0.28 among
+  the stations with a lift; a fit gives ~53 min + 11 min/km east + 18 min
+  per 100 m of height, but the scatter within a neighbourhood (95 to 220 min
+  across the Castro, Glen Park and Corona Heights) is as big as the trend.
+  Sheltered pockets and the push's depth on the day matter more than
+  distance.
+* **Not a crisp front at 10-minute scale.** A lagged correlation of
+  de-seasoned 30-minute temperature changes, coast to each station, is weak
+  (r 0.1-0.2) and peaks at 0-20 min. Day-to-day changes are mostly
+  city-wide; the push shows up as an event, not a wave you can track minute
+  by minute with ~25 stations.
+* Corona Heights' F2543 reports no RH, so the detector never fires there;
+  AW038 (Hunters Point) fires on 69% of afternoons with or without the coast,
+  so it carries no signal.
+
+**As features** (`transform/upwind.py`, gold.upwind_features, the `up_*`
+columns): for the coast, ridge and east groups, the mean of each station's
+1 h and 3 h change and its anomaly against its own trailing 14 days at the
+same time of day, for temperature and RH; coast minus east; and minutes
+since today's coastal push. As-of: the 10-minute bucket ending at init.
+Models `gbm_terrain_upwind` (with own obs) and `gbm_nwp_terrain_upwind`
+(without).
+
+**Results** (`backtest/ablation.py`, in memory, gold snapshot
+`1140949246963792470`; reports in `data/reports/experiments/upwind-*`). CRPS
+change vs the same model without `up_*`, paired on identical rows, 95%
+day-block bootstrap CI; negative = upwind better:
+
+| | Temp 1-3 h | Temp 4-6 h | Gust 1-3 h | Gust 4-6 h |
+| --- | --- | --- | --- | --- |
+| With own obs, rolling folds (`gbm_terrain_upwind`) | **-1.4%** [-0.9, -2.1] | **-1.7%** [-1.1, -2.3] | -0.1% [-0.3, +0.1] | 0.0% [-0.2, +0.2] |
+| No own obs, held out (`gbm_nwp_terrain_upwind`) | **-3.0%** [-2.2, -3.8] | **-2.5%** [-1.6, -3.4] | **-1.2%** [-1.0, -1.5] | **-1.0%** [-0.8, -1.3] |
+
+* **The PurpleAir transect's gain, for free.** With own obs it is the same
+  size as `gbm_purpleair`'s (-1.2 to -1.7%), larger at 4-6 h than 1-3 h, as a
+  push taking hours to cross would be. Gust: nothing, as before.
+* **More where there's no station**, the house and ride case: SFOC1 (the
+  house's stand-in) held out **-5.6% / -6.4%**, F4637 -8.1% / -5.3%, 604PG
+  -7.8% / -4.5%, KSFO -4.0% / -2.2%. Better at 18 of 31 stations (1-3 h),
+  worse at 5 (F6803 and D5422 among the near-zero ones).
+* **Not a leak.** A held-out station that is in a group still feeds its own
+  obs into that group's means. Stations outside the groups gain as much
+  (held out, temperature -2.6% / -2.5% vs -3.2% / -2.4% for members;
+  rolling, better at 10 of 14 and worse at none).
+* Gust without own obs gains a point: GGBC1 -2.2%, F4637 -3%; FTPC1 +2.7%
+  worse (the Fort Point anemometer sits under the bridge).
+
+Verdict: **adopted as an input for temperature.** It costs nothing (MADIS
+stations we already pull, in real time from MADIS or Synoptic) and replaces
+what the transect gave. Live inference should use it with `gbm_terrain` for
+temperature; gust stays on `gbm_terrain` for points with their own obs.
+
+## Regime features and the time-lagged HRRR ensemble (2026-10-18)
+
+Two ideas that need no new source, only more of HRRR.
+
+**Regime ("the fog").** The marine layer is a lid: cool, moist air under a
+warm inversion, pushed in by onshore flow. HRRR knows the lid even where it
+gets the surface wrong, so the GBM gets, per point and cycle: 925 and 850 mb
+temperature, 925 mb wind, PBL height (`nwp_t925`, `nwp_t850`, `nwp_u925`,
+`nwp_v925`, `nwp_hpbl`, added to the default HRRR pass and backfilled
+2025-04 →), and derived from them the inversion (`inv925` = T925 - T2m,
+`inv850`), the 925 mb wind speed and its onshore component through the Gate
+(`onshore925`, from 270°). Models `gbm_terrain_regime` and
+`gbm_nwp_terrain_regime`.
+
+**Lagged ensemble.** For each forecast, the six earlier hourly HRRR cycles'
+forecasts for the same valid hour (so leads up to 12 h, backfilled from the
+kept window with `--variables t2m,gust --leads 7-12`). As features: how many
+there are, their mean, their spread and the newest run's change
+(`lag_n/mean/sd/d1_*`; `gbm_terrain_lagged`). As sigma: sigma² = a + b ·
+spread² per lead, fitted on the model's held-out 15% (`SpreadSigma`;
+`gbm_terrain_lagged_sigma`).
+
+**Results** (`backtest/ablation.py`, gold snapshot `400097479855311500`,
+reports in `data/reports/experiments/regime-*`; scripts
+`data/logs/regime-lag-ablation-2026-10-18.py`). CRPS change vs the model
+without, paired rows, 95% day-block CI; negative = better:
+
+| | Temp 1-3 h | Temp 4-6 h | Gust 1-3 h | Gust 4-6 h |
+| --- | --- | --- | --- | --- |
+| Regime, own obs, rolling (`gbm_terrain_regime`) | **-0.9%** [-0.3, -1.4] | **-2.5%** [-1.8, -3.1] | **-0.9%** [-0.7, -1.1] | **-1.1%** [-0.9, -1.3] |
+| Regime, no own obs, held out (`gbm_nwp_terrain_regime`) | **-4.6%** [-3.9, -5.4] | **-4.8%** [-4.0, -5.6] | -0.1% [-0.3, +0.1] | -0.2% [-0.4, +0.0] |
+| Lagged as features, rolling (`gbm_terrain_lagged`) | **-0.6%** [-0.4, -0.9] | **-0.4%** [-0.2, -0.6] | **-0.8%** [-0.7, -1.0] | **-0.7%** [-0.6, -0.9] |
+| Lagged spread as sigma, vs lagged (`gbm_terrain_lagged_sigma`) | **-0.9%** [-0.8, -1.0] | **-0.7%** [-0.6, -0.8] | **-0.3%** [-0.2, -0.4] | **-0.3%** [-0.2, -0.4] |
+
+* **Regime is the bigger of the two, and where it was aimed.** Temperature
+  at 4-6 h gains 2.5% with own obs (skill +35.4% → +37.0%), and without own
+  obs, the house and ride case, nearly 5% (skill +5.4% → +9.9% at 4-6 h;
+  +7.5% → +11.7% at 1-3 h). Better at every one of 31 stations with own obs
+  (4-6 h; most at PG521, G6226, 180PG, AV684, 3-4%). Held out, 21-23 of 31
+  stations are better beyond the CI (AU915, G5625 and F4637 by 9-13%) and two
+  worse: G6226 (+8-10%) and PG733 or F6992 (+1-2%).
+* **Gust: a point with own obs, a split without.** Rolling, better at 28 of
+  32 stations. Held out it nets to zero, but that hides 11-12 stations
+  better and 11-12 worse beyond their CIs, GGBC1 (+1.5%), 604PG (+3.5%) and
+  PXOC1 (+5-6%) among the worse. Without own obs, keep gust off regime.
+* **Lagged: small but everywhere.** Under 1% each, CIs clear of 0, better at
+  28-30 stations of 31-32. The one worse beyond its CI is F6992 (gust, +2-5%),
+  which reports gust rarely (1,011 scored rows, vs ~33k at most stations). The run-to-run trend is mostly
+  information the latest run already has.
+* **Spread as sigma helps CRPS without a coverage cost:** better at 29-30
+  stations; 80% intervals catch 83.5-84.3%, vs 83.7-84.4% with the plain
+  per-lead sigma.
+* F6992 is worse with regime gust too (+19-22% with own obs), on the same
+  thin sample; not enough to act on.
+
+**Do they stack?** (`data/logs/stack-ablation-2026-10-18.py`, reports in
+`data/reports/experiments/stack-rolling/`.) Yes. Each step against the one
+before it, rolling folds with own obs:
+
+| | Temp 1-3 h | Temp 4-6 h | Gust 1-3 h | Gust 4-6 h |
+| --- | --- | --- | --- | --- |
+| + regime, on top of upwind | **-0.8%** [-0.3, -1.4] | **-1.8%** [-1.3, -2.4] | **-0.6%** [-0.5, -0.8] | **-0.9%** [-0.8, -1.1] |
+| + lagged features and spread sigma, on top of both | **-1.9%** [-1.5, -2.2] | **-1.4%** [-1.1, -1.8] | **-1.0%** [-0.8, -1.2] | **-1.0%** [-0.8, -1.2] |
+
+CRPS skill vs raw HRRR, all stations:
+
+| | Temp 1-3 h | Temp 4-6 h | Gust 1-3 h | Gust 4-6 h |
+| --- | --- | --- | --- | --- |
+| `gbm_terrain` | +48.6% | +35.4% | +55.3% | +51.8% |
+| + upwind | +49.3% | +36.4% | +55.4% | +51.8% |
+| + regime | +49.7% | +37.5% | +55.7% | +52.3% |
+| + lagged, spread sigma (`gbm_terrain_stack`) | **+50.6%** | **+38.4%** | **+56.1%** | **+52.8%** |
+
+Coverage of the 80% interval stays 83.6-84.3%. Better at 29-30 of 31-32
+stations at every step; the only station worse beyond its CI is F6992 (thin
+gust sample, above) and KOAK at temp 1-3 h with regime (+0.8%).
+
+Verdict: **adopted.** `gbm_terrain_stack` (terrain + regime + upwind + lagged
+features, sigma from the lagged spread) is the candidate for points with their
+own obs, temperature and gust. For points without obs: regime and upwind for
+temperature (`gbm_nwp_terrain` + both), and for gust upwind only (regime
+splits stations there). The lagged ensemble wasn't run held out. Swapping the
+live and site default from `gbm_terrain` to the stack is Next #4's job.
+
+
+## RRFS: collecting, not using (2026-10-18)
+
+RRFS v1 replaces NAM, HREF, SREF and HiresW on **2026-11-03 at 12Z** (SCN
+26-48, revised 10-15; the date moved from 08-31, 10-14 and 10-06). HRRR
+stays: it is two of REFS's members, and NOAA has announced no HRRR changes
+beyond a guess-file swap (PNS 26-70). The pre-operational feed has been on
+AWS (`noaa-rrfs-ops-pds`) since 2026-08-13.
+
+`microcast backfill rrfs` (`ingest/rrfs.py`, D13) collects RRFS at the registry
+points and MADIS stations: hourly cycles, leads 1-6, the 4 nearest cells, eight
+fields (T2m, dewpoint, 10 m wind, gust, visibility, ceiling, DSWRF) from the
+top-of-hour step of the `2dfld.3km.subh` file. That is ~14 MB read per lead and
+under 1 MB of bronze per cycle (~0.3 GB a year). RRFS runs on HRRR's grid
+(1799 x 1059 Lambert, LoV 262.5, grid-relative winds), so silver aligns it
+with HRRR's code (`model = 'rrfs'`). Gold ignores it.
+
+**As-of rule for when it is used:** RRFS publishes later than HRRR. S3
+Last-Modified on 2026-10-17: f06 of an hourly cycle at +86 to +97 min, of the
+12Z cycle at +124 min (HRRR f06: +62 min). So at our issue time (HRRR init +
+55 min) the newest RRFS is the cycle 1-2 hours older. Use `available_at =
+init + 130 min` and take the latest RRFS cycle available by issue time.
+
+**When to compare:**
+* **2027-01, a first look:** RRFS vs HRRR raw skill at our stations
+  (Aug-Dec), and whether the RRFS - HRRR difference correlates with HRRR's
+  error. Diagnostic only.
+* **2027-04, the real test:** with a winter's rain season in hand (Nov-Mar),
+  add RRFS (and RRFS - HRRR) as features to `gbm_terrain` in the rolling
+  backtest, scored only on months that have RRFS. Adopt if the CI excludes 0.
+* Flag the 11-03 switch from the parallel to the operational feed; same
+  code (v1.0), but check for a step in RRFS's bias around it.
+* REFS (`prob`: ceiling, visibility and 10 m wind exceedances; `mean`/`sprd`:
+  T2m, wind, low cloud, 925/850 mb) is not collected. Revisit with the cloud
+  target (queue #9).
+
+Running it: in the catch-up script (`data/logs/catchup-2026-10-18.sh`, after
+the HRRR passes, one writer at a time) until Dagster takes it over; every day
+or two is enough (the default window is the last 3 days, and it resumes). The bucket's retention isn't stated; the prototype bucket
+(`noaa-rrfs-pds`) now holds only retrospectives, so don't count on it keeping
+everything.
 
 ## NBM benchmark (2026-10-12)
 

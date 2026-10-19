@@ -17,6 +17,49 @@ reproducible.
   "D" ids cited below). These take precedence over the design doc.
 - [Phase 1 spec](docs/specs/phase-1.md): what's built and what's next.
 
+## Current champion model
+
+**`gbm_terrain_stack`** (since 2026-10-18), for points with a station of
+their own. Replace this section when a new model beats it in the backtest.
+
+It starts from the newest HRRR forecast and predicts HRRR's error at each
+point with a LightGBM model. Its inputs:
+
+- HRRR's own fields at the point (temperature, humidity, wind, gust, cloud,
+  visibility, sunshine);
+- the station's latest obs and its recent bias;
+- terrain (height and how it differs from HRRR's, slope, which way it faces,
+  shelter from the west wind, distance to open water);
+- the marine layer's lid and the flow above it ("regime");
+- the push of cool, damp air moving inland from the coast, seen at MADIS
+  stations ("upwind");
+- the six previous HRRR runs' forecasts for the same hour. When those runs
+  disagree, the forecast's uncertainty range widens.
+
+How it compares with raw HRRR, all 31-32 stations, July 2025 to October 2026
+(16 months, each forecast by a model trained only on earlier months; ~930k
+temperature and ~955k gust forecasts):
+
+| | Temp 1-3 h | Temp 4-6 h | Gust 1-3 h | Gust 4-6 h |
+| --- | --- | --- | --- | --- |
+| Skill vs raw HRRR (CRPS, 95% CI) | **+50.6%** [49.8, 51.5] | **+38.4%** [37.3, 39.5] | **+56.1%** [55.4, 56.9] | **+52.8%** [51.9, 53.6] |
+| Typical miss, raw HRRR | 2.5 °F | 2.6 °F | 6.0 mph | 6.2 mph |
+| Typical miss, champion | 1.2 °F | 1.6 °F | 2.6 mph | 2.9 mph |
+| 80% range catches the outcome | 84% | 84% | 84% | 84% |
+
+Skill is the drop in CRPS, a score for probabilistic forecasts in the
+forecast's own units (°F or mph); +50% halves HRRR's score. "Typical miss" is
+the mean absolute error. Previous champion: `gbm_terrain`, +48.6% / +35.4%
+temperature, +55.3% / +51.8% gust. The model history and every experiment,
+kept or rejected, are in the [phase 1 spec](docs/specs/phase-1.md)
+("Experiments: tried and queued").
+
+Without a station at the point (the house, the ride), skill is much lower,
+around +10-12% for temperature and +22-24% for gust. For those points the regime
+and upwind inputs help temperature. For gust, upwind helps there but regime
+doesn't. The live forecast and the status site still run `gbm_terrain`, until
+they're switched over.
+
 ## What exists today vs. what's planned
 
 The [design doc](docs/design.md) describes the full system. Most of it is not
@@ -28,7 +71,7 @@ built yet. As of 2026-10-06:
   forecast points (`config/places.yaml`).
 - A local Iceberg lake (PyIceberg with a SQLite catalog, Parquet files under
   `./data`) with bronze, silver and gold layers, queried through DuckDB.
-- Ingest from nine working data sources (table below) into the lake's bronze layer.
+- Ingest from ten working data sources (table below) into the lake's bronze layer.
 - Terrain features for every point (USGS 3DEP 10 m elevation, HRRR's own
   terrain height, slope, shelter, fetch from the water) in
   `silver.static_features`.
@@ -62,6 +105,7 @@ built yet. As of 2026-10-06:
 | --- | --- | --- | --- | --- |
 | HRRR via Herbie (NOAA on AWS) | Forecast fields (temperature, dewpoint, wind, gust, rain, visibility, sunlight, cloud) at our points | ~27 registry points around SF | `microcast ingest nwp` (live GRIB; the newest run, ~1 h after its start) | Works; run by hand |
 | HRRR history (University of Utah hrrrzarr archive) | The same fields for past cycles, up to 18 h ahead | Hourly cycles 2025-04 → now (~13,000; 124 missing in the archive), at the registry points and 42 network stations. Each cycle's Bay Area window is kept on disk (2.4 GB), so a new point inside it needs no download | `microcast backfill hrrr` (`--points network` for the stations) | Loaded; the archive runs ~3 h behind real time |
+| RRFS via Herbie (NOAA on AWS) | HRRR's successor (operational 2026-11-03): temperature, dewpoint, wind, gust, visibility, ceiling, sunlight, leads 1–6 | Registry points and MADIS stations; hourly cycles from 2026-08-13 (the pre-operational feed) | `microcast backfill rrfs` (default: the last 3 days; run every day or two) | Collecting, not yet a model input; compared from 2027 ([D13](docs/decisions.md#d13--rrfs-collect-at-our-points-now-compare-in-spring-2027)) |
 | NBM via Herbie (NOAA on AWS) | National Blend of Models: temperature and gust, mean and ensemble spread, as a benchmark only | The backtest stations; one run a day (rotating hour) 2025-07 → 2026-10-05 | `microcast backfill nbm` | Loaded (462 runs) |
 | IEM ASOS | Airport observations: temperature, dewpoint, wind, gust | KSFO (SFO), KOAK (Oakland) | `microcast ingest obs` | Loaded 2025-04 → now |
 | IEM HADS | Hourly temperature | SFOC1 (the Mint, downtown SF; the house's stand-in) | `microcast ingest obs` | Loaded 2025-04 → now |
@@ -88,7 +132,8 @@ the Synoptic stations. The PurpleAir transect sensors are inputs to one model, n
 - Hosting the status site at weather.henry.st (D8).
 - Live inference, the forecast panel on the site, and plain-language alerts
   to Slack.
-- More NWP models (RRFS, REFS, GFS), and cloud-cover forecasts.
+- RRFS as a model input (collected from 2026-10-18; compared in 2027), REFS and
+  GFS, and cloud-cover forecasts.
 
 The [phase 1 spec](docs/specs/phase-1.md) has the running checklist and the
 ordered next steps.
@@ -207,17 +252,22 @@ src/microcast/
   registry.py      places/routes → virtual points with bearings
   lake/            Iceberg schemas, catalog, append-only bronze writer
   ingest/nwp.py    Herbie subset → pick_points(k=4) → long Arrow (live)
-  ingest/hrrr_zarr.py  HRRR history from the hrrrzarr archive (backfill)
+  ingest/hrrr_zarr.py  HRRR history from the hrrrzarr archive (backfill; `--variables` adds fields later)
+  ingest/rrfs.py   RRFS at our points from AWS, top-of-hour fields only (collected, not yet used)
   ingest/obs.py    station truth: IEM ASOS/HADS, NDBC
   ingest/purpleair.py  own PurpleAir sensor (LAN or API)
   ingest/synoptic.py   Synoptic/CWOP stations (last 7 days, accrues)
   ingest/madis.py  MADIS mesonet history (CWOP, PG&E stations), streamed hourly
   ingest/dem.py    USGS 3DEP elevation over the HRRR window, 10 m, cached
   lake/copy.py     copy bronze to another catalog (laptop -> cluster)
-  transform/       bronze → silver → gold (DuckDB SQL); network.py: PurpleAir transect features;
-                   static.py: terrain features per point
+  transform/       bronze → silver → gold (DuckDB SQL; gold.py has the lagged HRRR ensemble);
+                   network.py: PurpleAir transect features; upwind.py: the marine push at the
+                   MADIS stations; static.py: terrain features per point
   models/          Forecaster zoo: raw_hrrr, bias_rolling, gbm_residual, gbm_purpleair,
-                   gbm_terrain, gbm_nwp, gbm_nwp_terrain
+                   gbm_terrain, gbm_nwp, gbm_nwp_terrain, gbm_terrain_stack (terrain +
+                   regime + upwind + lagged HRRR, adopted 2026-10-18), and the
+                   *_neighbours, *_regime, *_lagged and *_upwind experiments
+  backtest/ablation.py  paired model-vs-twin comparisons -> data/reports/experiments/
   backtest/        folds, CRPS, skill + bootstrap CI, leaderboard
   pipeline.py      backtest orchestration + MLflow
   site/            static status site (weather.henry.st)

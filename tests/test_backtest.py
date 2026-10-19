@@ -103,3 +103,61 @@ def test_gbm_purpleair_uses_the_network_features():
     assert crps["gbm_purpleair"] < 0.8 * crps["gbm_residual"]
     with pytest.raises(ValueError, match="pa_"):
         models.make("gbm_purpleair", "t2m").fit(_gold(days=30))
+
+
+def test_regime_inputs_are_derived():
+    from microcast import models as zoo
+
+    df = pd.DataFrame({"nwp_t2m": [15.0], "nwp_t925": [22.0], "nwp_t850": [20.0], "nwp_u925": [5.0], "nwp_v925": [0.0]})
+    out = zoo.with_regime(df)
+    assert out.inv925[0] == pytest.approx(7.0) and out.inv850[0] == pytest.approx(5.0)
+    assert out.onshore925[0] == pytest.approx(5.0)  # a westerly blows straight in through the Gate
+    assert out.wind925[0] == pytest.approx(5.0)
+    assert set(zoo.regime_columns()) <= set(out.columns) | {"nwp_hpbl"}
+
+
+def test_spread_sigma_grows_with_spread():
+    from microcast import models as zoo
+
+    rng = np.random.default_rng(0)
+    spread = pd.Series(rng.uniform(0.2, 2.0, 5000))
+    lead = pd.Series(np.full(5000, 60))
+    resid = pd.Series(rng.normal(0, np.sqrt(0.25 + spread**2)))
+    s = zoo.SpreadSigma()
+    s.fit(lead, spread, resid)
+    a, b = s.coef[60]
+    assert a == pytest.approx(0.25, abs=0.1) and b == pytest.approx(1.0, abs=0.15)
+    narrow, wide, none = s.predict(pd.Series([60, 60, 60]), pd.Series([0.2, 2.0, np.nan]))
+    assert narrow < wide and none == pytest.approx(s.rms[60])
+
+
+def test_stack_uses_every_input_and_spread_sigma():
+    from microcast import models as zoo
+
+    g = _gold(days=60)
+    rng = np.random.default_rng(4)
+    n = len(g)
+    g["st_elev"] = 10.0
+    g["up_coast_t2m_anom"] = rng.normal(0, 1, n)
+    for f in ("t925", "t850", "u925", "v925", "hpbl"):
+        g[f"nwp_{f}"] = rng.normal(0, 1, n)
+    g["lag_n_t2m"], g["lag_mean_t2m"], g["lag_d1_t2m"] = 6.0, g.nwp_t2m, 0.0
+    g["lag_sd_t2m"] = rng.uniform(0.2, 2.0, n)
+    m = zoo.make("gbm_terrain_stack", "t2m")
+    m.fit(g)
+    assert {"st_elev", "up_coast_t2m_anom", "inv925", "onshore925", "lag_sd_t2m"} <= set(m.cols)
+    x = g.tail(2).assign(lag_sd_t2m=[0.2, 2.0], lead_min=60)
+    narrow, wide = m.predict(x).sigma
+    assert narrow <= wide
+
+
+def test_paired_change_is_relative_crps_on_shared_rows():
+    from microcast.backtest import ablation
+
+    t = pd.date_range("2026-07-01", periods=40, freq="D", tz="UTC")
+    base = pd.DataFrame({"model_name": "a", "variable": "t2m", "point_id": "X", "init_time": t, "lead_min": 60,
+                         "valid_time": t, "crps": 1.0})  # fmt: skip
+    better = base.assign(model_name="b", crps=0.9)
+    out = ablation.paired_change(pd.concat([base, better]), "b", "a", n_boot=200)
+    row = out[out.point == "all"].iloc[0]
+    assert row.change == pytest.approx(-0.1) and row.lo == pytest.approx(-0.1) and row.hi == pytest.approx(-0.1)

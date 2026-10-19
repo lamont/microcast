@@ -119,6 +119,15 @@ NWP_FIELDS = [
     "t2m_spread",  # max - min over the 4 cells: a gradient/edge signal
     "gust_spread",
 ]
+# Regime fields (marine layer lid and the flow above it), kept apart from NWP_FIELDS so
+# the models that predate them keep their exact inputs and an ablation stays clean.
+REGIME_FIELDS = [
+    "t925",  # degC
+    "t850",
+    "u925",  # earth-relative, m/s
+    "v925",
+    "hpbl",  # PBL height, m
+]
 NWP_ALIGNED_SCHEMA = _wide(
     ("model", _S, True),
     ("init_time", _T, True),
@@ -127,9 +136,12 @@ NWP_ALIGNED_SCHEMA = _wide(
     ("point_id", _S, True),
     *((f, _D, False) for f in NWP_FIELDS),
     ("ingested_at", _T, True),
+    *((f, _D, False) for f in REGIME_FIELDS),  # added later: Iceberg appends new columns at the end
 )
 
 TARGETS = ["t2m", "gust"]
+# Time-lagged HRRR ensemble per target (transform.gold): member count, mean, spread, run-to-run change.
+LAG_FIELDS = [f"lag_{stat}_{t}" for t in TARGETS for stat in ("n", "mean", "sd", "d1")]
 # One row per (station point, cycle, lead). issue_time is when the forecast could
 # first be made (HRRR history: init + 55 min). Every obs-derived feature is as of
 # issue_time; targets are obs at valid_time.
@@ -149,6 +161,8 @@ TRAINING_SCHEMA = _wide(
         for t in TARGETS
         for prefix in ("obs_last", "err_at_init", "bias14", "std14", "obs")
     ),
+    *((f"nwp_{f}", _D, False) for f in REGIME_FIELDS),
+    *((f, _D, False) for f in LAG_FIELDS),
 )
 
 # Every prediction a model made (backtest now, live later), as a Gaussian plus quantiles.
@@ -230,6 +244,8 @@ NETWORK_FEATURES_SCHEMA = _wide(
     ("value", _D, False),
 )
 GOLD_NETWORK_FEATURES = TableDef("gold", "network_features", NETWORK_FEATURES_SCHEMA, _spec(NETWORK_FEATURES_SCHEMA))
+# The marine push as the MADIS stations see it (transform.upwind): same long shape.
+GOLD_UPWIND_FEATURES = TableDef("gold", "upwind_features", NETWORK_FEATURES_SCHEMA, _spec(NETWORK_FEATURES_SCHEMA))
 
 # Terrain and exposure per point (transform.static), long: one row per (point, feature).
 STATIC_FEATURES_SCHEMA = _wide(
@@ -248,6 +264,7 @@ TABLES: list[TableDef] = [
     SILVER_STATIC_FEATURES,
     GOLD_TRAINING,
     GOLD_NETWORK_FEATURES,
+    GOLD_UPWIND_FEATURES,
     GOLD_FORECASTS,
     GOLD_SCORES,
 ]

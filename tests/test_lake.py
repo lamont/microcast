@@ -91,3 +91,32 @@ def test_duckdb_reads_latest_batch(catalog):
         """
     ).fetchall()
     assert {v for (v,) in latest} == {289.0}
+
+
+def test_init_lake_adds_new_columns(catalog):
+    from pyiceberg.expressions import AlwaysTrue
+    from pyiceberg.schema import Schema
+    from pyiceberg.types import DoubleType, NestedField, StringType
+
+    from microcast.lake.schemas import TableDef, _spec
+
+    old = Schema(NestedField(1, "point_id", StringType(), required=True))
+    new = Schema(NestedField(1, "point_id", StringType(), required=True), NestedField(2, "x", DoubleType()))
+    lake.init_lake(catalog, [TableDef("gold", "t", old, _spec(old))])
+    lake.replace_partition("gold.t", pa.table({"point_id": ["a"]}), AlwaysTrue(), catalog)
+    lake.init_lake(catalog, [TableDef("gold", "t", new, _spec(new))])
+    table = catalog.load_table("gold.t")
+    assert table.schema().column_names == ["point_id", "x"]
+    assert table.scan().to_arrow().to_pylist() == [{"point_id": "a", "x": None}]
+
+
+def test_old_metadata_versions_are_pruned(catalog):
+    from pathlib import Path
+
+    lake.init_lake(catalog)
+    for i in range(14):
+        lake.append_bronze("bronze.nwp_point", _rows(f"b{i}", float(i), n=1), catalog, batches=[f"b{i}"])
+    table = catalog.load_table("bronze.nwp_point")
+    meta = Path(table.metadata_location.removeprefix("file://")).parent
+    assert len(list(meta.glob("*.metadata.json"))) <= 11  # current + previous-versions-max
+    assert len(table.snapshots()) == 14

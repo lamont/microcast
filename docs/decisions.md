@@ -496,14 +496,48 @@ Lakekeeper later, D1). Data moves with `lake copy` (D11). Until the cluster
 is ready, Synoptic's 7-day window means its pull has to run from the laptop
 at least weekly.
 
+## D13 · RRFS: collect at our points now, compare in spring 2027
+
+*2026-10-18*
+
+**Decision.** Collect RRFS from the AWS feed at the registry points and MADIS
+stations from now on (`microcast backfill rrfs`), as small as it can be, and
+don't use it as a model input until it has a winter of history. The design's
+first-week plan (an `rrfs` subh asset and REFS products through the generic
+GRIB path) is narrowed to this.
+
+**Why.** RRFS replaces NAM, HREF, SREF and HiresW on 2026-11-03 (SCN 26-48;
+the design's "October 6 or 14" was overtaken) and is HRRR's long-run
+successor. History can't be backfilled once the bucket drops it, so it has to
+accrue. But two months of summer and fall can't train or judge anything, and
+HRRR isn't going away yet.
+
+**Shape.**
+
+- Hourly cycles, leads 1-6, 4 nearest cells, eight surface fields, the
+  top-of-hour step only. Byte-ranged from the `.idx` and deleted after
+  extraction: ~84 MB read and under 1 MB kept per cycle (~0.3 GB a year).
+- Bronze rows use HRRR's variable names; silver aligns `model = 'rrfs'` with
+  the HRRR code (same grid and projection). Gold reads HRRR only.
+- First look 2027-01, real test 2027-04 (spec, "RRFS: collecting, not
+  using"). RRFS publishes 30-60 min later than HRRR, so the as-of rule pairs
+  each HRRR cycle with the RRFS cycle 1-2 hours older.
+- REFS isn't collected. Its `prob` file answers the open question below:
+  ceiling, visibility and 10 m wind exceedances, rain, no gust.
+
+**Consequences.** Until Dagster runs it, someone runs `backfill rrfs` every
+day or two (its default window is the last 3 days). It is one more writer on
+the catalog, so it goes in the catch-up script, not alongside other loads.
+
 ## Open
 
-- RRFS/REFS operational date (Oct 6 vs Oct 14, 2026) is still unverified. Herbie
-  2026.9.2 ships `rrfs` and `refs` templates on `noaa-rrfs-ops-pds`.
+- ~~RRFS/REFS operational date.~~ 2026-11-03 at 12Z (SCN 26-48, revised
+  2026-10-15); see D13. Herbie 2026.9.2's `rrfs` template finds the S3 files.
 - Backyard station model (D5). It was described as an "AccuWeather" wifi
   station; if that's an AcuRite (e.g. Atlas), it reports light in lux and UV,
   not W/m², and local capture needs rtl_433 or the Access hub. Tempest and
   Ecowitt report W/m² and push locally. Confirm before building the ingest.
 - External endpoint for weather.henry.st (later, via Traefik).
-- REFS products available through Herbie: `mean, sprd, pmmn, lpmm, avrg, prob,
-  eas, ffri`. Check whether `prob` covers the rain and wind exceedances we need.
+- ~~REFS `prob` contents.~~ Checked 2026-10-18: rain, ceiling (< 152 to
+  3050 m), visibility, dewpoint and 10 m wind (> 10.3 m/s and up)
+  exceedances; no gust. See D13.

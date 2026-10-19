@@ -59,6 +59,16 @@ def load_models(path: Path | None = None) -> dict[str, ModelConfig]:
     }
 
 
+def _split_levels(da: xr.DataArray):
+    """(level label, single-level array) pairs: cfgrib stacks e.g. 925 and 850 mb into one variable."""
+    level_type = da.attrs.get("GRIB_typeOfLevel", "unknown")
+    if level_type in da.dims and da.sizes[level_type] > 1:
+        for value in da[level_type].values:
+            yield f"{level_type}:{float(value):g}", da.sel({level_type: value}, drop=True)
+    else:
+        yield None, da
+
+
 def _level(ds: xr.Dataset, da: xr.DataArray) -> str:
     level_type = da.attrs.get("GRIB_typeOfLevel", "unknown")
     coord = ds.coords.get(level_type)
@@ -91,37 +101,38 @@ def to_long(
     ingested_at = ingested_at or datetime.now(UTC)
     frames = []
     for ds in datasets:
-        for name, da in ds.data_vars.items():
-            df = da.to_dataframe(name="value").reset_index()
-            n = len(df)
-            if "k" not in df:
-                df["k"] = 0
-            step = pd.to_timedelta(df["step"]) if "step" in df else pd.Series(pd.Timedelta(0), index=df.index)
-            dist_km = df["point_grid_distance"] if "point_grid_distance" in df else np.nan
-            frames.append(
-                pd.DataFrame(
-                    {
-                        "model": model,
-                        "product": product,
-                        "init_time": _utc(df["time"]),
-                        "lead_min": (step / pd.Timedelta(minutes=1)).astype("int32"),
-                        "valid_time": _utc(df["valid_time"]),
-                        "point_id": df["point_id"].astype(str),
-                        "variable": str(name) if name != "unknown" else da.attrs.get("GRIB_shortName", "unknown"),
-                        "level": _level(ds, da),
-                        "member": np.full(n, member, dtype="int32"),
-                        "k": df["k"].astype("int32"),
-                        "value": df["value"].astype("float64"),
-                        "grid_lat": df["latitude"].astype("float64") if "latitude" in df else np.nan,
-                        "grid_lon": ((df["longitude"] + 180) % 360 - 180).astype("float64")
-                        if "longitude" in df
-                        else np.nan,
-                        "grid_dist_m": dist_km * 1000.0,
-                        "ingest_batch": ingest_batch,
-                        "ingested_at": pd.Timestamp(ingested_at).tz_convert("UTC"),
-                    }
+        for name, stacked in ds.data_vars.items():
+            for level, da in _split_levels(stacked):
+                df = da.to_dataframe(name="value").reset_index()
+                n = len(df)
+                if "k" not in df:
+                    df["k"] = 0
+                step = pd.to_timedelta(df["step"]) if "step" in df else pd.Series(pd.Timedelta(0), index=df.index)
+                dist_km = df["point_grid_distance"] if "point_grid_distance" in df else np.nan
+                frames.append(
+                    pd.DataFrame(
+                        {
+                            "model": model,
+                            "product": product,
+                            "init_time": _utc(df["time"]),
+                            "lead_min": (step / pd.Timedelta(minutes=1)).astype("int32"),
+                            "valid_time": _utc(df["valid_time"]),
+                            "point_id": df["point_id"].astype(str),
+                            "variable": str(name) if name != "unknown" else da.attrs.get("GRIB_shortName", "unknown"),
+                            "level": level or _level(ds, da),
+                            "member": np.full(n, member, dtype="int32"),
+                            "k": df["k"].astype("int32"),
+                            "value": df["value"].astype("float64"),
+                            "grid_lat": df["latitude"].astype("float64") if "latitude" in df else np.nan,
+                            "grid_lon": ((df["longitude"] + 180) % 360 - 180).astype("float64")
+                            if "longitude" in df
+                            else np.nan,
+                            "grid_dist_m": dist_km * 1000.0,
+                            "ingest_batch": ingest_batch,
+                            "ingested_at": pd.Timestamp(ingested_at).tz_convert("UTC"),
+                        }
+                    )
                 )
-            )
     if not frames:
         return NWP_POINT_SCHEMA.as_arrow().empty_table()
     out = pd.concat(frames, ignore_index=True)

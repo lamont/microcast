@@ -237,6 +237,36 @@ def backfill_nbm(
     typer.echo(", ".join(f"{k} {v}" for k, v in stats.items()))
 
 
+@backfill_app.command("rrfs")
+def backfill_rrfs(
+    start: str = typer.Option(None, help="First cycle (ISO date/time, UTC); default 3 days back"),
+    end: str = typer.Option(None, help="Stop before this cycle (ISO date/time, UTC); default now"),
+    stride: int = typer.Option(1, help="Keep one cycle in N (rotating hour)"),
+    workers: int = typer.Option(4, help="Parallel cycle fetches (processes)"),
+) -> None:
+    """RRFS at the registry points and MADIS stations into bronze.nwp_point (collected, not yet used).
+
+    Also the live collector: with no dates it fills the last 3 days, so a run
+    every day or two keeps up while the bucket holds the cycles.
+    """
+    from microcast.ingest import rrfs
+    from microcast.lake.catalog import get_catalog, init_lake
+    from microcast.transform import static
+
+    init_lake()
+    now = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    first = _parse_init(start) if start else now - timedelta(days=3)
+    last = _parse_init(end) if end else now
+    ids = {vp.point_id for vp in registry_mod.load().virtual_points()}
+    st = get_catalog().load_table("bronze.stations").scan(selected_fields=("source", "station_id")).to_arrow()
+    ids |= {r["station_id"] for r in st.to_pylist() if r["source"] == "madis"}
+    pos = static.points()
+    points = pos[pos.point_id.isin(ids)].reset_index(drop=True)
+    typer.echo(f"{len(points)} points, cycles {first:%Y-%m-%dT%H} to {last:%Y-%m-%dT%H}")
+    stats = rrfs.backfill(points, first, last, stride_h=stride, workers=workers, log=typer.echo)
+    typer.echo(", ".join(f"{k} {v}" for k, v in stats.items()))
+
+
 @backfill_app.command("hrrr")
 def backfill_hrrr(
     start: str = typer.Option(..., help="First cycle (ISO date/time, UTC)"),
@@ -246,17 +276,26 @@ def backfill_hrrr(
     workers: int = typer.Option(16, help="Parallel cycle fetches"),
     commit_every: int = typer.Option(48, help="Cycles per bronze append (one snapshot each)"),
     points: str = typer.Option("registry", help="'registry', or 'network': stations in bronze.stations"),
-    tag: str = typer.Option("net1", help="Batch tag for a network pass; use a new one when stations are added"),
+    tag: str = typer.Option(
+        None, help="Batch tag: required for a network or --variables pass (network default: net1); new set, new tag"
+    ),
+    variables: str = typer.Option(
+        None, help="Subset to load: groups 'surface', 'regime' and/or short names ('t2m,gust'); default all"
+    ),
 ) -> None:
     """HRRR history from the hrrrzarr archive into bronze.nwp_point (kept window under data/hrrr/window/)."""
-    from microcast.ingest.hrrr_zarr import backfill
+    from microcast.ingest.hrrr_zarr import backfill, select
     from microcast.lake.catalog import init_lake
 
     init_lake()
     registry = registry_mod.load()
     network = _network_points(registry) if points == "network" else None
     if network is not None:
+        tag = tag or "net1"
         typer.echo(f"{len(network)} network points: {' '.join(vp.point_id for vp in network)}")
+    chosen = select(variables) if variables else None
+    if chosen is not None:
+        typer.echo(f"variables: {' '.join(f'{lv}/{v}' for lv, v in chosen)}")
     stats = backfill(
         registry,
         _parse_init(start),
@@ -266,7 +305,8 @@ def backfill_hrrr(
         workers=workers,
         commit_every=commit_every,
         points=network,
-        tag=tag if network is not None else None,
+        tag=tag,
+        variables=chosen,
         log=typer.echo,
     )
     typer.echo(", ".join(f"{k} {v}" for k, v in stats.items()))
@@ -311,6 +351,9 @@ def build_gold(
         k: float(v["lon"]) for k, v in registry_mod.load().sensors.items() if v.get("kind") == "purpleair_network"
     }
     typer.echo(f"gold.network_features: {network.rebuild(transect)} rows from {len(transect)} PurpleAir sensors")
+    from microcast.transform import upwind
+
+    typer.echo(f"gold.upwind_features: {upwind.rebuild()} rows from {len(upwind.stations())} MADIS stations")
 
 
 @build_app.command("static")

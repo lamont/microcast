@@ -9,6 +9,13 @@ Observations are first snapped to the hour: the report nearest the top of the
 hour within +-20 minutes (ASOS routine reports are at :56, SFOC1 at :43, NDBC
 every 6-10 minutes). ``gust`` is the reported gust, else the sustained wind:
 ASOS only reports a gust when it is gusting, and a calm hour's gust is its wind.
+
+Rows are made for leads up to ``MAX_LEAD_MIN``. Longer leads in silver (7-12 h,
+T2m and gust only) feed the time-lagged ensemble: at a row's valid time, the
+up to ``LAG_CYCLES`` earlier HRRR cycles' forecasts for the same hour. Each
+was issued before this cycle, so they are as-of too. ``lag_*`` columns: how
+many there are, their mean and spread with this cycle's own, and this cycle
+minus the one before (the run-to-run change).
 """
 
 from __future__ import annotations
@@ -18,13 +25,15 @@ import pyarrow as pa
 from pyiceberg.expressions import AlwaysTrue, EqualTo
 
 from microcast.lake.catalog import get_catalog, replace_partition
-from microcast.lake.schemas import NWP_FIELDS, TRAINING_SCHEMA
+from microcast.lake.schemas import NWP_FIELDS, REGIME_FIELDS, TRAINING_SCHEMA
 
 HRRR_ISSUE_DELAY_MIN = 55
 OBS_DELAY_MIN = 5
 BIAS_WINDOW_DAYS = 14
+MAX_LEAD_MIN = 360
+LAG_CYCLES = 6
 
-_nwp_cols = ",\n    ".join(f"n.{f} AS nwp_{f}" for f in NWP_FIELDS)
+_nwp_cols = ",\n    ".join(f"n.{f} AS nwp_{f}" for f in NWP_FIELDS + REGIME_FIELDS)
 
 _TRAINING_SQL = f"""
 WITH obs_snap AS (
@@ -66,7 +75,25 @@ base AS (
     FROM nwp n
     LEFT JOIN obs_hour tgt ON tgt.point_id = n.point_id AND tgt.hour = n.valid_time
     LEFT JOIN obs_hour last_ ON last_.point_id = n.point_id AND last_.hour = n.init_time
-    WHERE n.model = 'hrrr'
+    WHERE n.model = 'hrrr' AND n.lead_min <= {MAX_LEAD_MIN}
+),
+members AS (
+    -- This cycle (k = 0) and the earlier cycles' forecasts for the same valid hour.
+    SELECT point_id, init_time, lead_min, 0 AS k, nwp_t2m AS t2m, nwp_gust AS gust FROM base
+    UNION ALL
+    SELECT b.point_id, b.init_time, b.lead_min,
+        CAST((epoch(b.init_time) - epoch(m.init_time)) / 3600 AS INTEGER) AS k, m.t2m, m.gust
+    FROM base b
+    JOIN nwp m ON m.model = 'hrrr' AND m.point_id = b.point_id AND m.valid_time = b.valid_time
+        AND m.init_time >= b.init_time - INTERVAL {LAG_CYCLES} HOUR AND m.init_time < b.init_time
+),
+lagged AS (
+    SELECT point_id, init_time, lead_min,
+        count(t2m) AS lag_n_t2m, avg(t2m) AS lag_mean_t2m, stddev_samp(t2m) AS lag_sd_t2m,
+        first(t2m) FILTER (WHERE k = 0) - first(t2m) FILTER (WHERE k = 1) AS lag_d1_t2m,
+        count(gust) AS lag_n_gust, avg(gust) AS lag_mean_gust, stddev_samp(gust) AS lag_sd_gust,
+        first(gust) FILTER (WHERE k = 0) - first(gust) FILTER (WHERE k = 1) AS lag_d1_gust
+    FROM members GROUP BY ALL
 ),
 with_init AS (
     -- HRRR's own error at the cycle time: obs at init minus this cycle's f00.
@@ -86,9 +113,10 @@ rolling AS (
     -- visible before issue_time: one window per lead (see _rolling_sql).
     {{rolling}}
 )
-SELECT w.*, rolling.* EXCLUDE (point_id, init_time, lead_min)
+SELECT w.*, rolling.* EXCLUDE (point_id, init_time, lead_min), lagged.* EXCLUDE (point_id, init_time, lead_min)
 FROM with_init w
 LEFT JOIN rolling USING (point_id, init_time, lead_min)
+LEFT JOIN lagged USING (point_id, init_time, lead_min)
 ORDER BY point_id, init_time, lead_min
 """
 
@@ -121,7 +149,7 @@ def build_training(nwp: pa.Table, obs: pa.Table) -> pa.Table:
     con = duckdb.connect()
     con.register("nwp", nwp)
     con.register("obs", obs)
-    leads = pa.compute.unique(nwp["lead_min"]).to_pylist() or [0]
+    leads = [m for m in pa.compute.unique(nwp["lead_min"]).to_pylist() if m <= MAX_LEAD_MIN] or [0]
     return (
         con.sql(training_sql(leads))
         .to_arrow_table()

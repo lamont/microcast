@@ -134,3 +134,33 @@ def test_read_window_stitches_across_chunks(monkeypatch):
     out = hz._read_window("x", with_time=True)
     assert out.shape == (2, 4, 2)
     assert (out[:, :2] == 1).all() and (out[:, 2:] == 2).all()
+
+
+def test_select_groups_and_names():
+    assert hz.select(None) == list(hz.VARIABLES)
+    assert hz.select("regime") == hz.REGIME
+    assert hz.select("t2m,gust") == [("2m_above_ground", "TMP"), ("surface", "GUST")]
+    assert set(hz.GROUPS["surface"]) | set(hz.REGIME) == set(hz.VARIABLES)
+    with pytest.raises(ValueError, match="unknown"):
+        hz.select("nope")
+
+
+def test_window_adds_missing_fields_without_refetching(fake_archive):
+    hz.fetch_cycle(INIT, CELLS, [1], variables=hz.GROUPS["surface"])
+    reads = fake_archive.reads["n"]
+    assert reads == 2 * len(hz.GROUPS["surface"])
+    t = hz.fetch_cycle(INIT, CELLS, [1], variables=hz.REGIME)  # only the new fields hit the archive
+    assert fake_archive.reads["n"] == reads + 2 * len(hz.REGIME)
+    assert set(t.to_pandas().level) == {"isobaricInhPa:925", "isobaricInhPa:850", "surface"}
+    hz.fetch_cycle(INIT, CELLS, [1])  # everything now on disk
+    assert fake_archive.reads["n"] == reads + 2 * len(hz.REGIME)
+
+
+def test_variable_subset_pass_needs_a_tag(fake_archive, catalog, monkeypatch):
+    monkeypatch.setattr(lake, "get_catalog", lambda: catalog)
+    lake.init_lake(catalog)
+    start, end = INIT.replace(hour=0), INIT.replace(hour=1)
+    with pytest.raises(ValueError, match="needs a tag"):
+        hz.backfill(None, start, end, [1], variables=hz.REGIME, log=lambda _: None)
+    stats = hz.backfill(None, start, end, [1], variables=hz.REGIME, tag="regime", log=lambda _: None)
+    assert stats["rows"] == len(hz.REGIME) * len(CELLS)

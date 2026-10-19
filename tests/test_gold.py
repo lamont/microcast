@@ -128,3 +128,25 @@ def test_rolling_bias_matches_the_as_of_rule_by_brute_force():
         else:
             assert g["bias14_t2m"] is None
     assert checked > 50
+
+
+def test_lagged_ensemble_uses_earlier_cycles_only():
+    # Cycle c forecasts t2m = 10 + c at every lead, so members at one valid hour differ by cycle.
+    rows = []
+    for c in range(5):
+        for lead in range(9):
+            init = T0 + c * H
+            key = dict(init_time=init, lead_min=60 * lead, valid_time=init + lead * H, point_id="KSFO")
+            rows.append(
+                dict.fromkeys(NWP_FIELDS)
+                | dict(t2m=10.0 + c, gust=5.0, wind10=3.0, model="hrrr", ingested_at=init)
+                | key
+            )
+    out = gold.build_training(pa.Table.from_pylist(rows, schema=NWP_ALIGNED_SCHEMA.as_arrow()), _obs([]))
+    assert max(out.column("lead_min").to_pylist()) == gold.MAX_LEAD_MIN  # leads 7-8 only feed the lag
+    r = _by_key(out)[T0 + 3 * H, 60]  # valid T0+4h: cycles 3, 2, 1, 0 (not 4, issued later)
+    assert r["lag_n_t2m"] == 4
+    assert r["lag_mean_t2m"] == pytest.approx(11.5)
+    assert r["lag_d1_t2m"] == pytest.approx(1.0)
+    assert r["lag_sd_gust"] == pytest.approx(0.0)
+    assert _by_key(out)[T0, 60]["lag_n_t2m"] == 1  # the first cycle has no earlier runs

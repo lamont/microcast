@@ -71,3 +71,16 @@ def test_models_config_parses():
     assert models["hrrr"].enabled and models["hrrr"].lead_hours()[:3] == [0, 1, 2]
     assert models["rrfs_ens"].members == [1, 2, 3, 4, 5]
     assert batch_id("hrrr", pd.Timestamp("2026-10-04T12"), 3) == "hrrr/2026-10-04T12/f003/m0"
+
+
+def test_stacked_pressure_levels_split_by_level():
+    # cfgrib returns TMP at 925 and 850 mb as one variable with an isobaricInhPa dimension.
+    ds = _picked(k=1).drop_vars("heightAboveGround")
+    t = xr.DataArray(
+        np.stack([np.full((1, len(POINTS)), 293.0), np.full((1, len(POINTS)), 295.0)]),
+        dims=["isobaricInhPa", "k", "point"],
+        coords={"isobaricInhPa": [925.0, 850.0]},
+        attrs={"GRIB_typeOfLevel": "isobaricInhPa"},
+    )
+    df = to_long(xr.Dataset({"t": t}, coords=ds.coords), model="hrrr", product="sfc", ingest_batch="b").to_pandas()
+    assert df.groupby("level").value.first().to_dict() == {"isobaricInhPa:850": 295.0, "isobaricInhPa:925": 293.0}
