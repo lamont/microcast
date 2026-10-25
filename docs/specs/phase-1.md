@@ -208,7 +208,8 @@ which commit restores it. Details live in the dated sections further down.
 5. Data quality, the general version: a per-station check against
    neighbours and HRRR that would have caught GGBC1 (stuck values, mirrored
    or rotated vanes) without a hand-kept list.
-6. Dagster on k3s (D12), picked back up 2026-10-16. Done: one multi-arch
+6. Dagster on k3s (D12), picked back up 2026-10-16. Superseded by
+   [`dagster-k8s.md`](dagster-k8s.md) (2026-10-19); the history below stays. Done: one multi-arch
    (amd64 + arm64) image, `deploy/docker/Dockerfile`, built by CI and pushed to
    `ghcr.io/lamont/microcast` on `main` (`deploy/docker/publish.sh` from the
    laptop); mirroring it to the Gitea registry at gitea.henry.st comes later.
