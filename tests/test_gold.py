@@ -14,7 +14,7 @@ T0 = datetime(2026, 7, 1, 0, tzinfo=UTC)
 H = timedelta(hours=1)
 
 
-def _nwp(cycles: int, leads=(0, 1, 2), t2m=10.0) -> pa.Table:
+def _nwp(cycles: int, leads=(0, 1, 2), t2m=10.0, point="KSFO") -> pa.Table:
     rows = []
     for c in range(cycles):
         for lead in leads:
@@ -22,16 +22,16 @@ def _nwp(cycles: int, leads=(0, 1, 2), t2m=10.0) -> pa.Table:
             row = dict.fromkeys(NWP_FIELDS) | dict(t2m=t2m, gust=5.0, wind10=3.0)
             rows.append(
                 row
-                | dict(model="hrrr", init_time=init, lead_min=60 * lead, valid_time=init + lead * H, point_id="KSFO")
+                | dict(model="hrrr", init_time=init, lead_min=60 * lead, valid_time=init + lead * H, point_id=point)
                 | dict(ingested_at=init)
             )
     return pa.Table.from_pylist(rows, schema=NWP_ALIGNED_SCHEMA.as_arrow())
 
 
-def _obs(rows: list[tuple[datetime, str, float]]) -> pa.Table:
+def _obs(rows: list[tuple[datetime, str, float]], station="KSFO") -> pa.Table:
     return pa.Table.from_pylist(
         [
-            dict(source="iem_asos", station_id="KSFO", obs_time=t, variable=v, value=x, qc_flag="ok", ingested_at=t)
+            dict(source="iem_asos", station_id=station, obs_time=t, variable=v, value=x, qc_flag="ok", ingested_at=t)
             for t, v, x in rows
         ],
         schema=OBS_QC_SCHEMA.as_arrow(),
@@ -81,13 +81,30 @@ def test_error_at_init_uses_this_cycles_f00():
     assert rows[T0 + H, 120]["obs_last_t2m"] == 11.5
 
 
+def test_late_station_uses_the_obs_visible_at_issue_time():
+    # GGBC1 reaches the live feed ~75 min late: at a cycle's 55-min issue time its newest
+    # visible hour is the one before init, compared with that hour's own cycle's f00.
+    assert gold.init_lag_h(gold.OBS_LATENCY_MIN["GGBC1"]) == 1
+    nwp = pa.concat_tables(
+        [_nwp(1, point="GGBC1"), _nwp(2, point="GGBC1", t2m=20.0).filter(pa.compute.field("init_time") > T0)]
+    )
+    obs = _obs([(T0 + h * H, "t2m", 11.5 + h) for h in range(4)], station="GGBC1")
+    rows = _by_key(gold.build_training(nwp, obs))
+    r = rows[T0 + H, 120]
+    assert r["obs_last_t2m"] == 11.5  # 00Z, not 01Z's 12.5
+    assert r["err_at_init_t2m"] == pytest.approx(1.5)  # vs the 00Z cycle's f00 (10.0), not 01Z's (20.0)
+    assert rows[T0, 60]["obs_last_t2m"] is None  # nothing an hour before the first cycle
+    # Lead 0 of 01Z verifies at 01:00, which isn't visible until 02:20: no bias yet at 01:55.
+    assert rows[T0 + H, 0]["bias14_t2m"] == pytest.approx(1.5)  # 00Z's lead 0 only
+
+
 def test_rolling_bias_matches_the_as_of_rule_by_brute_force():
     """The windowed SQL against a direct reading of the rule, on random data with gaps."""
     import random
 
     rng = random.Random(7)
     leads = (0, 1, 3, 6)
-    points = ("KSFO", "C5988")
+    points = ("KSFO", "C5988", "GGBC1")  # GGBC1: a late station (OBS_LATENCY_MIN)
     rows = []
     for p in points:
         for c in range(24 * 20):  # 20 days of hourly cycles, so the 14-day window slides
@@ -119,7 +136,8 @@ def test_rolling_bias_matches_the_as_of_rule_by_brute_force():
         issue = r["init_time"] + timedelta(minutes=gold.HRRR_ISSUE_DELAY_MIN)
         seen = [
             e for v, e in resid.get((r["point_id"], r["lead_min"]), [])
-            if v + timedelta(minutes=gold.OBS_DELAY_MIN) <= issue and v > issue - timedelta(days=gold.BIAS_WINDOW_DAYS)
+            if v + timedelta(minutes=gold.OBS_LATENCY_MIN.get(r["point_id"], gold.OBS_DELAY_MIN)) <= issue
+            and v > issue - timedelta(days=gold.BIAS_WINDOW_DAYS)
         ]  # fmt: skip
         g = got[r["point_id"], r["init_time"], r["lead_min"]]
         if seen:

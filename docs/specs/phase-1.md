@@ -182,11 +182,12 @@ which commit restores it. Details live in the dated sections further down.
 
 ## Next
 
-1. Synoptic: `microcast ingest synoptic` at least weekly (the free tier keeps
-   7 days; the trial ends ~2026-10-19, then check what the account becomes).
-   GGBC1 joined the Synoptic stations 2026-10-09. Doing without Synoptic:
-   D10 "Real time without Synoptic" (MADIS real-time covers everything;
-   GGBC1 arrives ~1 h late there, costing ~4 points of bridge gust skill).
+1. Live obs: `microcast ingest madis` hourly (the real-time files keep ~5
+   days). Synoptic's trial ended 2026-10-19 and the account is refused; D10
+   "Synoptic ended" (2026-10-25) records the switch. GGBC1 arrives ~75 min
+   late, so gold uses its hour-old obs (~4 points of bridge gust skill, an
+   accepted cost). Winning that back needs a real-time bridge measure of our
+   own (D10).
 2. Neighbour obs, follow-ups (first pass done 2026-10-07, see below):
    neighbour features for temperature only (they cost gust 2 points), and a
    no-own-obs sigma that matches its 70–74% coverage. Bridge gust must keep
@@ -197,7 +198,7 @@ which commit restores it. Details live in the dated sections further down.
    |sin(direction − 354.7°)|, from the corrected vane), HRRR's crosswind
    gust and along-bridge wind as features, and a "crosswind gust > 9 m/s"
    probability. Then a `gg_bridge` route whose points use GGBC1's forecast.
-4. Live inference, first cut: the newest HRRR run (live GRIB) through
+4. Live inference, first cut (superseded by [`live-forecast.md`](live-forecast.md), 2026-10-25: the bridge first, as `microcast forecast` and on the site): the newest HRRR run (live GRIB) through
    `gbm_terrain` for the house, the Castro stations, the ride and the bridge.
    Tried by hand on 2026-10-07 (scratch script, not kept): live HRRR at
    GGBC1, FTPC1, 604PG and F4637 through `nwp.fetch_cycle`, fresh Synoptic
@@ -218,9 +219,9 @@ which commit restores it. Details live in the dated sections further down.
       volume for the warehouse, and the lake moved with `lake copy` (D11): the
       laptop's Iceberg metadata holds absolute laptop paths, so its `data/`
       can't simply be mounted.
-   2. One plain k8s Job, `microcast ingest synoptic`, to prove the image,
-      secrets, catalog and storage before Dagster (and to take the weekly
-      Synoptic pull off the laptop).
+   2. One plain k8s Job, `microcast ingest madis`, to prove the image,
+      secrets, catalog and storage before Dagster (and to take the hourly
+      live-obs pull off the laptop).
    3. Dagster: `dagster dev` on the laptop with the ingest, backfill and build
       commands as partitioned assets, schedules and per-table concurrency
       pools, declared in `defs.yaml` where possible; then the
@@ -443,7 +444,7 @@ init + 130 min` and take the latest RRFS cycle available by issue time.
   T2m, wind, low cloud, 925/850 mb) is not collected. Revisit with the cloud
   target (queue #9).
 
-Running it: in the catch-up script (`data/logs/catchup-2026-10-18.sh`, after
+Running it: in the catch-up script (`data/logs/catchup-2026-10-25.sh`, after
 the HRRR passes, one writer at a time) until Dagster takes it over; every day
 or two is enough (the default window is the last 3 days, and it resumes). The bucket's retention isn't stated; the prototype bucket
 (`noaa-rrfs-pds`) now holds only retrospectives, so don't count on it keeping

@@ -70,7 +70,7 @@ class Route:
 @dataclass
 class Station:
     id: str
-    source: str  # which obs ingest serves it: iem_asos, iem_hads, ndbc
+    source: str  # which obs ingest serves it: iem_asos, iem_hads, ndbc, madis
     lat: float
     lon: float
 

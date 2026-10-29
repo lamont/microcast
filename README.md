@@ -110,14 +110,13 @@ built yet. As of 2026-10-06:
 | IEM ASOS | Airport observations: temperature, dewpoint, wind, gust | KSFO (SFO), KOAK (Oakland) | `microcast ingest obs` | Loaded 2025-04 → now |
 | IEM HADS | Hourly temperature | SFOC1 (the Mint, downtown SF; the house's stand-in) | `microcast ingest obs` | Loaded 2025-04 → now |
 | NDBC | Temperature, wind, gust | FTPC1 (Fort Point, Golden Gate) | `microcast ingest obs` | Loaded 2025-04 → now |
-| Synoptic | Temperature, wind, gust, solar radiation | 604PG (PG&E, Golden Gate Park) and five CWOP home stations in the Castro | `microcast ingest synoptic` | Works; free tier keeps 7 days, so it accrues from 2026-09-28 |
-| MADIS mesonet archive | History for the same Synoptic stations plus ~25 more in the SF box (CWOP, PG&E, Presidio, Marin headlands) | 2025-04 → now | `microcast backfill madis` | Loaded (18.8M rows) |
+| MADIS mesonet | 604PG (PG&E, Golden Gate Park), five CWOP home stations in the Castro, GGBC1 (Golden Gate Bridge) and ~25 more in the SF box (CWOP, PG&E, Presidio, Marin headlands) | 2025-04 → now | `microcast backfill madis` (archive), `microcast ingest madis` (live, hourly) | Loaded (18.8M rows). Replaced Synoptic, whose trial ended 2026-10-19 (D10) |
 | PurpleAir, own sensor | PM2.5 on both laser channels, sensor temperature, humidity, pressure | The outdoor PA-II at the house | `microcast ingest purpleair` (home network, free) | Works; run by hand |
 | ~~PurpleAir, public transect~~ | ~~Hourly sensor temperature~~ | ~~10 public sensors, Ocean Beach → Sunset → Twin Peaks → Castro~~ | ~~`microcast backfill purpleair` (paid API points)~~ | **Removed 2026-10-16:** a 1–2% temperature gain wasn't worth the API cost or the upkeep. The history already loaded (2025-04 → 2026-10-05) stays in the lake, so `gbm_purpleair` and its results remain ([spec](docs/specs/phase-1.md#purpleair-transect-ingest-removed-2026-10-16)) |
 
 The backtest trains and scores at 36 stations: the four original truth
 stations (SFOC1, KSFO, KOAK, FTPC1) plus the MADIS network, which includes
-the Synoptic stations. The PurpleAir transect sensors are inputs to one model, never truth
+604PG, the Castro stations and GGBC1. The PurpleAir transect sensors are inputs to one model, never truth
 (their temperature reads hot), and their history stops at 2026-10-05.
 
 **Planned, not built**
@@ -193,8 +192,8 @@ It shows ingestion status and an empty backtest state until results exist.
 A partially written report set is rejected rather than displayed as complete.
 
 Collectors, run by hand until Dagster schedules them (D12): `microcast ingest
-synoptic` (at least weekly; the free tier keeps only 7 days), `microcast ingest
-purpleair` (every 2 min on the home network). MADIS history: `microcast
+madis` (hourly, before each HRRR cycle's issue time; the real-time files keep
+~5 days), `microcast ingest purpleair` (every 2 min on the home network). MADIS history: `microcast
 backfill madis --start 2025-04-01` (resumable; streams ~30 MB per hour of data
 and keeps the SF box). To move the lake to the cluster: `microcast lake copy --to <catalog>`,
 then rebuild silver and gold there (decisions D11).
@@ -256,8 +255,7 @@ src/microcast/
   ingest/rrfs.py   RRFS at our points from AWS, top-of-hour fields only (collected, not yet used)
   ingest/obs.py    station truth: IEM ASOS/HADS, NDBC
   ingest/purpleair.py  own PurpleAir sensor (LAN or API)
-  ingest/synoptic.py   Synoptic/CWOP stations (last 7 days, accrues)
-  ingest/madis.py  MADIS mesonet history (CWOP, PG&E stations), streamed hourly
+  ingest/madis.py  MADIS mesonet (CWOP, PG&E, GGBC1): archive history and the live files
   ingest/dem.py    USGS 3DEP elevation over the HRRR window, 10 m, cached
   lake/copy.py     copy bronze to another catalog (laptop -> cluster)
   transform/       bronze → silver → gold (DuckDB SQL; gold.py has the lagged HRRR ensemble);
