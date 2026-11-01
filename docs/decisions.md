@@ -366,6 +366,40 @@ Synoptic serves us live, and the free route for each:
   `obs_last` / `err_at_init` from the obs actually visible at issue time
   (about an hour before init), in training as well as live.
 
+**Synoptic ended; live obs come from MADIS** (2026-10-25). The trial ran
+out on 2026-10-19: the last Synoptic row is 10-19 12:01Z, and every endpoint
+now answers 403 "Unauthorized. Review your account access settings in the
+customer console", with the old token and with one freshly generated from the
+key (the key still issues tokens). We don't pay for it. What changed:
+
+- The seven stations (604PG, the five Castro CWOP, GGBC1) are `source:
+  madis` in the registry. History is the archive (`backfill madis`) as
+  before; live is `microcast ingest madis`, which reads the last two
+  real-time files (the current hour and the one before, which still gains
+  late reports) into bronze.obs under the same `source = 'madis'`, so silver
+  keeps whichever copy of a report was ingested last and the archive pass
+  still lands later. Run it hourly, before each HRRR cycle's issue time;
+  ~31 MB per file, ~45 GB a month at two files an hour.
+- Gold applies the as-of rule above: `gold.OBS_LATENCY_MIN` gives GGBC1 80
+  minutes (75 seen, plus margin), so its `obs_last`, `err_at_init` (against
+  the f00 of the cycle at that obs hour) and rolling bias use only what was
+  visible at issue time. Every other station keeps 5 minutes. The neighbour
+  features inherit it, since they are built from neighbours' gold rows.
+- Accepted cost: ~4 points of bridge gust skill at 1–3 h (+37.3% → ~+33%
+  vs raw HRRR, measured above). Measured with the rule in gold (default
+  `gbm_terrain_stack`, backtest of 2026-10-25 vs 10-18's; one more week of
+  data, so approximate): GGBC1 gust +32.0% → +28.5% at 1–3 h (MAE 1.10 →
+  1.16 m/s), +25.4% → +24.6% at 4–6 h; 604PG and the original four
+  unchanged. **To win it back we need a real-time bridge
+  measure of our own**, at least for wind and gust: GGBC1 within ~15 min
+  from somewhere other than MADIS (NWS Monterey's own feed, if one is
+  reachable; the NWS API showed the same ~75 min), or a station of ours
+  with a clear view of the gap (Fort Point is close but not the deck).
+  Until then, the bridge forecast is an hour behind its truth.
+- `ingest synoptic`, `ingest/synoptic.py` and its test are removed; restore
+  from commit `d59d289` if a paid account is ever bought. The 2026-09-28 →
+  10-19 Synoptic rows stay in bronze (`source = 'synoptic'`).
+
 **PurpleAir network.** The BME280 temperature/RH/pressure of public PurpleAir
 sensors is a useful dense network for the marine-layer push (hot-biased, so
 used as changes, not levels; no wind). History exists only through the

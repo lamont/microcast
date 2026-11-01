@@ -3,7 +3,10 @@
 One row per (station point, cycle, lead). The as-of rule (design doc,
 Backtesting): a feature may only use data visible at ``issue_time``. For HRRR
 history ``issue_time = init_time + 55 min`` (when f00-f06 are usually out); an
-observation is visible 5 minutes after it was taken.
+observation is visible 5 minutes after it was taken, or later at a station in
+``OBS_LATENCY_MIN``. GGBC1 reaches the live MADIS feed ~75 min after the hour
+(D10), so its ``obs_last``, ``err_at_init`` and rolling bias are built from
+the obs an hour before init, in training as they would be live.
 
 Observations are first snapped to the hour: the report nearest the top of the
 hour within +-20 minutes (ASOS routine reports are at :56, SFOC1 at :43, NDBC
@@ -20,6 +23,8 @@ minus the one before (the run-to-run change).
 
 from __future__ import annotations
 
+import math
+
 import duckdb
 import pyarrow as pa
 from pyiceberg.expressions import AlwaysTrue, EqualTo
@@ -29,6 +34,8 @@ from microcast.lake.schemas import NWP_FIELDS, REGIME_FIELDS, TRAINING_SCHEMA
 
 HRRR_ISSUE_DELAY_MIN = 55
 OBS_DELAY_MIN = 5
+# Stations whose obs reach the live feed late: minutes from obs time to visible.
+OBS_LATENCY_MIN = {"GGBC1": 80}  # ~75 min seen in MADIS real time, plus margin
 BIAS_WINDOW_DAYS = 14
 MAX_LEAD_MIN = 360
 LAG_CYCLES = 6
@@ -69,12 +76,13 @@ base AS (
         sin(2 * pi() * dayofyear(n.valid_time) / 365.25) AS doy_sin,
         cos(2 * pi() * dayofyear(n.valid_time) / 365.25) AS doy_cos,
         tgt.t2m AS obs_t2m, tgt.gust AS obs_gust,
-        -- Latest hourly obs at or before the cycle time: reported by init + 20 min at the
-        -- latest, so visible well before issue_time.
+        -- Latest hourly obs visible at issue_time: the cycle time's own (reported by
+        -- init + 20 min), or an hour or more earlier at a late station.
         last_.t2m AS obs_last_t2m, last_.gust AS obs_last_gust
     FROM nwp n
     LEFT JOIN obs_hour tgt ON tgt.point_id = n.point_id AND tgt.hour = n.valid_time
-    LEFT JOIN obs_hour last_ ON last_.point_id = n.point_id AND last_.hour = n.init_time
+    LEFT JOIN obs_hour last_ ON last_.point_id = n.point_id
+        AND last_.hour = n.init_time - to_hours({{init_lag:n.point_id}})
     WHERE n.model = 'hrrr' AND n.lead_min <= {MAX_LEAD_MIN}
 ),
 members AS (
@@ -96,12 +104,14 @@ lagged AS (
     FROM members GROUP BY ALL
 ),
 with_init AS (
-    -- HRRR's own error at the cycle time: obs at init minus this cycle's f00.
+    -- HRRR's own error at the last visible obs: obs_last minus the f00 of the cycle at
+    -- that hour (this cycle's, unless the station is late).
     SELECT b.*,
         b.obs_last_t2m - f0.nwp_t2m AS err_at_init_t2m,
         b.obs_last_gust - f0.nwp_gust AS err_at_init_gust
     FROM base b
-    LEFT JOIN base f0 ON f0.point_id = b.point_id AND f0.init_time = b.init_time AND f0.lead_min = 0
+    LEFT JOIN base f0 ON f0.point_id = b.point_id AND f0.lead_min = 0
+        AND f0.init_time = b.init_time - to_hours({{init_lag:b.point_id}})
 ),
 resid AS (
     SELECT point_id, init_time, lead_min, valid_time,
@@ -121,16 +131,26 @@ ORDER BY point_id, init_time, lead_min
 """
 
 
-def _rolling_sql(lead_min: int) -> str:
-    """Rolling bias for one lead as a range window over valid_time.
+def init_lag_h(latency_min: int) -> int:
+    """Hours before init of the newest hourly obs visible at issue time."""
+    return max(0, math.ceil((latency_min - HRRR_ISSUE_DELAY_MIN) / 60))
+
+
+def _init_lag_sql(col: str) -> str:
+    whens = " ".join(f"WHEN '{p}' THEN {init_lag_h(m)}" for p, m in sorted(OBS_LATENCY_MIN.items()))
+    return f"CASE {col} {whens} ELSE {init_lag_h(OBS_DELAY_MIN)} END" if whens else str(init_lag_h(OBS_DELAY_MIN))
+
+
+def _rolling_sql(lead_min: int, delay_min: int = OBS_DELAY_MIN, where: str = "TRUE") -> str:
+    """Rolling bias for one lead (and one obs latency) as a range window over valid_time.
 
     Within a lead, issue_time = valid_time - lead + 55 min, so the as-of window
     (truth visible by issue_time, within the last 14 days) is a fixed range
     relative to each row's valid_time. A window instead of a self-join keeps
     this linear in rows: the join produced ~336 pairs per row.
     """
-    # visible: r.valid + 5 min <= issue  <=>  r.valid <= valid - (lead - 50 min)
-    hi = lead_min - (HRRR_ISSUE_DELAY_MIN - OBS_DELAY_MIN)
+    # visible: r.valid + delay <= issue  <=>  r.valid <= valid - (lead - (55 min - delay))
+    hi = lead_min - (HRRR_ISSUE_DELAY_MIN - delay_min)
     hi_sql = f"INTERVAL {hi} MINUTE PRECEDING" if hi >= 0 else f"INTERVAL {-hi} MINUTE FOLLOWING"
     # recent: r.valid > issue - 14 days  <=>  r.valid >= valid - (14 days + lead - 55 min) + 1 s
     lo_s = (BIAS_WINDOW_DAYS * 1440 + lead_min - HRRR_ISSUE_DELAY_MIN) * 60 - 1
@@ -138,11 +158,28 @@ def _rolling_sql(lead_min: int) -> str:
     return f"""SELECT point_id, init_time, lead_min,
         avg(r_t2m) OVER {w} AS bias14_t2m, stddev_samp(r_t2m) OVER {w} AS std14_t2m,
         avg(r_gust) OVER {w} AS bias14_gust, stddev_samp(r_gust) OVER {w} AS std14_gust
-    FROM resid WHERE lead_min = {lead_min}"""
+    FROM resid WHERE lead_min = {lead_min} AND {where}"""
+
+
+def _rolling_groups() -> list[tuple[int, str]]:
+    """(latency, point filter): the default stations, then each set of late ones."""
+    late: dict[int, list[str]] = {}
+    for p, m in sorted(OBS_LATENCY_MIN.items()):
+        late.setdefault(m, []).append(p)
+    if not late:
+        return [(OBS_DELAY_MIN, "TRUE")]
+    ids = lambda ps: ", ".join(f"'{p}'" for p in ps)  # noqa: E731
+    return [(OBS_DELAY_MIN, f"point_id NOT IN ({ids(OBS_LATENCY_MIN)})")] + [
+        (m, f"point_id IN ({ids(ps)})") for m, ps in late.items()
+    ]
 
 
 def training_sql(leads: list[int]) -> str:
-    return _TRAINING_SQL.replace("{rolling}", "\n    UNION ALL\n    ".join(_rolling_sql(m) for m in sorted(leads)))
+    rolling = [_rolling_sql(m, d, w) for m in sorted(leads) for d, w in _rolling_groups()]
+    sql = _TRAINING_SQL.replace("{rolling}", "\n    UNION ALL\n    ".join(rolling))
+    for col in ("n.point_id", "b.point_id"):
+        sql = sql.replace(f"{{init_lag:{col}}}", _init_lag_sql(col))
+    return sql
 
 
 def build_training(nwp: pa.Table, obs: pa.Table) -> pa.Table:

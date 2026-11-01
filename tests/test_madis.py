@@ -51,3 +51,18 @@ def test_hour_url():
     assert madis.hour_url(datetime(2025, 6, 1, 20, tzinfo=UTC)).endswith(
         "/2025/06/01/LDAD/mesonet/netCDF/20250601_2000.gz"
     )
+
+
+def test_realtime_reads_the_last_hours_in_one_append(monkeypatch):
+    from microcast.lake import catalog
+
+    fetched, appended = [], []
+    monkeypatch.setattr(madis, "fetch_hour", lambda t, realtime=False: fetched.append((t, realtime)) or _file())
+    monkeypatch.setattr(catalog, "append_bronze", lambda ident, data, batches=None: appended.append((ident, batches)))
+    now = datetime(2025, 6, 1, 20, 40, tzinfo=UTC)
+    stats = madis.realtime(2, now=now, box=madis.Box(), log=lambda _: None)
+    assert fetched == [(datetime(2025, 6, 1, 19, tzinfo=UTC), True), (datetime(2025, 6, 1, 20, tzinfo=UTC), True)]
+    ids = ["madis-rt/2025-06-01T19@2025-06-01T20:40", "madis-rt/2025-06-01T20@2025-06-01T20:40"]
+    assert appended == [("bronze.obs", ids), ("bronze.stations", ids)]
+    assert stats["fetched"] == 2 and stats["rows"] > 0
+    assert madis.hour_url(now, realtime=True).endswith("/data/LDAD/mesonet/netCDF/20250601_2000.gz")

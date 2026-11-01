@@ -1,13 +1,19 @@
-"""NOAA MADIS public mesonet archive into bronze.obs (free history for CWOP etc.).
+"""NOAA MADIS public mesonet files into bronze.obs: the history and the live feed.
 
 Each hour is one national netCDF-3 file, gzipped (~30 MB): stream it, keep
 the observations inside the network box, discard the rest. gzip and the
 record-interleaved netCDF-3 layout rule out range reads, so the whole file is
-read; what is kept is a few hundred KB. The free Synoptic tier has no
-history (D10); MADIS carries the same CWOP and PG&E stations.
+read; what is kept is a few hundred KB. MADIS carries the CWOP and PG&E
+stations, and GGBC1 (D10).
+
+Two copies of the same file: the **archive** (``backfill``, a day or two
+behind, final) and the **real-time** directory (``realtime``, the last ~5
+days, the current hour's file rewritten as reports arrive). A real-time pull
+re-reads the last few hours each time; its rows share ``source = 'madis'``
+with the archive's, so silver keeps whichever copy was ingested last.
 
 Rows: ``source = 'madis'``, ``station_id`` = the MADIS station id (the CWOP
-ids match Synoptic's, e.g. C5988), SI units and our variable names.
+ids are the CWOP call signs, e.g. C5988), SI units and our variable names.
 ``qc_flag`` holds MADIS's per-variable QC summary (V verified, S screened,
 C coarse pass, Q questionable, B bad, X rejected, Z none); silver drops B and X.
 Station positions go to bronze.stations, since network features need them.
@@ -32,6 +38,7 @@ import xarray as xr
 from microcast.lake.schemas import OBS_SCHEMA, STATIONS_SCHEMA
 
 BASE_URL = "https://madis-data.ncep.noaa.gov/madisPublic1/data/archive"
+REALTIME_URL = "https://madis-data.ncep.noaa.gov/madisPublic1/data/LDAD/mesonet/netCDF"
 
 # MADIS variable -> (our name, converter to SI as we store it)
 VARIABLES: dict[str, tuple[str, Callable[[np.ndarray], np.ndarray]]] = {
@@ -63,12 +70,19 @@ def configured_box() -> Box:
     return Box(*settings.madis_bounds())
 
 
-def hour_url(t: datetime) -> str:
+def hour_url(t: datetime, realtime: bool = False) -> str:
+    if realtime:
+        return f"{REALTIME_URL}/{t:%Y%m%d_%H}00.gz"
     return f"{BASE_URL}/{t:%Y/%m/%d}/LDAD/mesonet/netCDF/{t:%Y%m%d_%H}00.gz"
 
 
 def batch_id(t: datetime) -> str:
     return f"madis/{t:%Y-%m-%dT%H}"
+
+
+def realtime_batch_id(t: datetime, pulled: datetime) -> str:
+    """One per pull: the live file grows, so each pull of an hour is its own batch."""
+    return f"madis-rt/{t:%Y-%m-%dT%H}@{pulled:%Y-%m-%dT%H:%M}"
 
 
 def _text(a: xr.DataArray) -> np.ndarray:
@@ -134,10 +148,10 @@ def parse_hour(raw_gz: bytes, box: Box, batch: str, ingested_at: datetime | None
 _local = threading.local()
 
 
-def fetch_hour(t: datetime) -> bytes | None:
+def fetch_hour(t: datetime, realtime: bool = False) -> bytes | None:
     if not hasattr(_local, "session"):
         _local.session = requests.Session()
-    r = _local.session.get(hour_url(t), timeout=300)
+    r = _local.session.get(hour_url(t, realtime), timeout=300)
     if r.status_code == 404:
         return None
     r.raise_for_status()
@@ -213,4 +227,46 @@ def backfill(
             if len(ids) >= commit_every:
                 flush()
     flush()
+    return stats
+
+
+def realtime(
+    n_hours: int = 2,
+    *,
+    now: datetime | None = None,
+    box: Box | None = None,
+    log: Callable[[str], None] = print,
+) -> dict[str, int]:
+    """The last ``n_hours`` real-time files (the current hour included) into bronze.obs.
+
+    Run hourly before each HRRR cycle's issue time (init + 55 min). Two hours
+    by default: the previous hour's file still gains late reports (GGBC1's
+    arrive ~75 min after the hour). ~31 MB downloaded per file.
+    """
+    from microcast.lake.catalog import append_bronze
+
+    box = configured_box() if box is None else box
+    now = (now or datetime.now(UTC)).astimezone(UTC)
+    top = now.replace(minute=0, second=0, microsecond=0)
+    stats = {"fetched": 0, "missing": 0, "rows": 0}
+    obs_parts: list[pa.Table] = []
+    station_parts: list[pa.Table] = []
+    ids: list[str] = []
+    for t in hours(top - timedelta(hours=n_hours - 1), top + timedelta(hours=1)):
+        raw = fetch_hour(t, realtime=True)
+        if raw is None:
+            stats["missing"] += 1
+            log(f"  missing real-time {t:%Y-%m-%dT%H}")
+            continue
+        bid = realtime_batch_id(t, now)
+        obs, stations = parse_hour(raw, box, bid, ingested_at=now)
+        obs_parts.append(obs)
+        station_parts.append(stations)
+        ids.append(bid)
+        stats["fetched"] += 1
+        stats["rows"] += obs.num_rows
+        log(f"  {bid}: {obs.num_rows} rows")
+    if ids:  # one snapshot per table per pull
+        append_bronze("bronze.obs", pa.concat_tables(obs_parts), batches=ids)
+        append_bronze("bronze.stations", pa.concat_tables(station_parts), batches=ids)
     return stats

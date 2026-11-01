@@ -120,7 +120,7 @@ def ingest_obs(
     from microcast.lake.catalog import init_lake
 
     init_lake()
-    archive_sources = {"iem_asos", "iem_hads", "ndbc"}  # Synoptic has its own command
+    archive_sources = {"iem_asos", "iem_hads", "ndbc"}  # MADIS has its own commands
     stations = [
         s for s in registry_mod.load().stations if s.source in archive_sources and (not station or s.id in station)
     ]
@@ -155,20 +155,17 @@ def ingest_purpleair(
         typer.echo(f"{bid}: {len(df)} rows")
 
 
-@ingest_app.command("synoptic")
-def ingest_synoptic(days: int = typer.Option(7, help="Days back to pull (free tier: at most 7)")) -> None:
-    """Synoptic stations from the registry: the last N days into bronze.obs. Run daily."""
-    from microcast.ingest import synoptic
-    from microcast.ingest.obs import to_arrow
-    from microcast.lake.catalog import append_bronze, init_lake
+@ingest_app.command("madis")
+def ingest_madis(
+    hours: int = typer.Option(2, help="Real-time files to read, the current hour included (~31 MB each)"),
+) -> None:
+    """MADIS real-time mesonet files (CWOP, PG&E, GGBC1, ...) into bronze.obs. Run hourly."""
+    from microcast.ingest import madis
+    from microcast.lake.catalog import init_lake
 
     init_lake()
-    ids = [s.id for s in registry_mod.load().stations if s.source == "synoptic"]
-    df = synoptic.fetch(ids, days)
-    bid = f"synoptic/{datetime.now(UTC):%Y-%m-%dT%H:%M}"
-    append_bronze("bronze.obs", to_arrow(df, bid), batches=[bid])
-    counts = df.groupby("station_id").size().to_dict()
-    typer.echo(f"{bid}: {len(df)} rows " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
+    stats = madis.realtime(hours, log=typer.echo)
+    typer.echo(", ".join(f"{k} {v}" for k, v in stats.items()))
 
 
 @backfill_app.command("madis")
@@ -189,13 +186,14 @@ def backfill_madis(
 def _network_points(registry: registry_mod.Registry) -> list[registry_mod.VirtualPoint]:
     """Every station in bronze.stations (MADIS, PurpleAir) the registry HRRR pass doesn't cover.
 
-    The Synoptic stations count as uncovered: they joined the registry after
-    the hourly fill started, so they have no HRRR rows (D10, "For code").
+    The registry's MADIS stations (once Synoptic's) count as uncovered: they
+    joined the registry after the hourly fill started, so they have no HRRR
+    rows (D10, "For code").
     """
     from microcast.lake.catalog import get_catalog
 
     covered = {vp.point_id for vp in registry.virtual_points()} - {
-        s.id for s in registry.stations if s.source == "synoptic"
+        s.id for s in registry.stations if s.source == "madis"
     }
     df = get_catalog().load_table("bronze.stations").scan().to_pandas()
     latest = df.sort_values("ingested_at").groupby("station_id").last()
