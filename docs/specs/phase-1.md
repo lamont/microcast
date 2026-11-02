@@ -231,7 +231,8 @@ which commit restores it. Details live in the dated sections further down.
    the 32-feature version.~~ Moot: the transect ingest was removed 2026-10-16.
 8. Backyard station (D5); confirm the model first.
 9. First look at `lcc` and DSWRF vs the CWOP solar sensors for D2.
-10. Status site on k3s, internal at weather.henry.st (D8).
+10. Status site on S3 + CloudFront, published by Dagster (D14,
+    [`static-hosting.md`](static-hosting.md)); replaces nginx on k3s (D8).
 
 ## Not in phase 1
 
