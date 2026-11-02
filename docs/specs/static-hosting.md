@@ -2,7 +2,8 @@
 
 *2026-10-26. Replaces D8's hosting (nginx on the home cluster) with an object
 store behind a CDN, published by Dagster. D8's content and privacy rule stand.
-Design agreed in conversation 2026-10-24 → 26; not yet built.*
+Design agreed in conversation 2026-10-24 → 26; confirmed 2026-11-01, when
+the publish timing and the credential choice were added; not yet built.*
 
 As in `dagster-k8s.md`, this is the generic half. The hostname, bucket name,
 AWS account, DNS zone and credentials belong to whoever deploys it and are
@@ -33,8 +34,9 @@ audience from the start (below), even while there's only one audience.
 1. The site's hostname serves the built site over HTTPS from a private S3
    bucket through CloudFront.
 2. A Dagster asset publishes hourly, 08:00–21:00 America/Los_Angeles, after
-   the site build. A publish uploads data files every run and the page shells
-   only when they've changed. Nothing about it counts as a "deploy".
+   the forecast and site build, and again after the daily backtest. A
+   publish uploads data files every run and the page shells only when
+   they've changed. Nothing about it counts as a "deploy".
 3. A visitor sees new data within about two minutes of a publish, with no
    CloudFront invalidation needed.
 4. `microcast publish` works the same from a laptop given the same env vars.
@@ -127,15 +129,42 @@ microcast publish [--from /data/site]
 
 ## Dagster
 
-A `site_publish` asset depending on `site`, pool none, size light. After
-`live-forecast.md` lands, the hourly chain is forecast → `site` → `site_publish`.
-Until then `site` and `site_publish` run hourly on the same 08:00–21:00 Pacific
-schedule, rebuilding from the latest backtest and freshness. That's about 14
-runs a day, ~430 a month.
+A `site_publish` asset depending on `site`, pool none, size light, run after
+every `site` (`dagster-k8s.md`, "One schedule: the hourly chain"):
+
+- **Hourly**, in the hourly chain: live ingests → `forecast` → `site` →
+  `site_publish`, at :45 from 08:45 to 20:45 Pacific (13 runs a day, ~400 a
+  month).
+- **Daily**, at the end of the daily chain: after `backtest`, so the
+  leaderboard and analytics publish as soon as the new backtest exists.
+
+Nothing publishes outside the run window, and nothing publishes before the
+forecast or backtest it would show has finished. Until `live-forecast.md`
+lands, the hourly chain is the live ingests → `site` → `site_publish`,
+refreshing freshness and the latest backtest.
 
 `site_publish` gets `MICROCAST_PUBLISH_BUCKET` and the AWS credentials from a
-Secret, alongside the others in `dagster-k8s.md`'s runtime contract. Add the
-rows there.
+Secret (`dagster-k8s.md`, runtime contract).
+
+### Credentials
+
+A long-lived access key for an IAM user whose only rights are on the site
+bucket (table below). Considered and not taken for now: workload identity
+(the cluster's service-account tokens trusted by AWS as an OIDC provider, so
+pods get short-lived role credentials). On a self-hosted cluster that means
+publishing the API server's OIDC discovery and keys at a public HTTPS issuer,
+changing the API server's issuer flags, and wiring the projected token into
+run pods. That's a cluster project worth doing once for every AWS credential
+the cluster holds, not a step in this one. It also wouldn't narrow who can use
+the credential: any run launched in the Dagster namespace can use its service
+account, just as it can read its Secrets. What keeps a leak small is the
+policy, so the policy is tight:
+
+- `s3:PutObject` and `s3:GetObject` (which covers `HeadObject`, for the
+  change detection) on the bucket's objects, `s3:ListBucket` on the bucket.
+- An explicit **Deny** on `PutObject` under `data/groups/*`, so "nothing under
+  `data/groups/` before phase C" holds in IAM as well as in the publisher.
+- No delete, no bucket settings, no CloudFront.
 
 ## AWS resources (deployer's side)
 
@@ -149,7 +178,7 @@ deployer knows what to make:
 | Bucket policy | Allows `s3:GetObject` to that distribution only. |
 | ACM certificate | In **us-east-1** (CloudFront's requirement), DNS-validated in the zone. |
 | Route 53 records | `A` and `AAAA` aliases for the hostname to the distribution, plus the certificate's validation CNAME. In the DNS zone's own Terraform. |
-| IAM user for the publisher | Policy: `s3:PutObject` and `s3:GetObject` on `arn:aws:s3:::<bucket>/*`, `s3:ListBucket` on the bucket. Nothing else. Its access key goes in the cluster Secret. |
+| IAM user for the publisher | Policy as in "Credentials" above: put/get objects, list the bucket, deny `data/groups/*`. Nothing else. Its access key goes in the cluster Secret. |
 
 *My call:* no example Terraform in this repo. The table is the contract.
 Unlike `deploy/k8s/`, a generic module here would be one more thing to keep
@@ -180,7 +209,7 @@ working that nobody runs from this repo.
   rule on coordinates still applies to them.
 - The hostname, bucket, account id or credentials in this repo.
 - A publish that leaves the site showing a broken page (see "Ordering").
-- Hourly runs outside 08:00–21:00 Pacific.
+- Runs outside 08:00–21:00 Pacific (`dagster-k8s.md`, "Run window").
 
 ## Checks
 

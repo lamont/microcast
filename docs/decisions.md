@@ -257,8 +257,9 @@ static host works. Once live inference exists (phase 4) the same pages gain
 the next-12-hour forecast panel the design described, read from
 `serving.latest`.
 
-**Hosting:** k3s on the home "swarm" cluster (the design's stage 3, early
-for this one service): the built files in an nginx container behind the
+**Hosting** *(superseded by D14)*: k3s on the home "swarm" cluster (the
+design's stage 3, early for this one service): the built files in an nginx
+container behind the
 cluster's Traefik ingress for `weather.henry.st`, rebuilt by a job after each
 backtest (later, each live scoring run).
 
@@ -291,7 +292,9 @@ and five CWOP stations around the Castro and Corona Heights (**C5988, F6803,
 E9227, F2543, F4637**), four of them with solar radiation, which is the D2
 low-cloud truth we lacked before the backyard station. `microcast ingest
 synoptic` pulls the last 7 days; schedule it daily (a Dagster schedule on the
-swarm cluster once that exists, D12).
+swarm cluster once that exists, D12). *(Superseded: the trial ended
+2026-10-19 and `ingest madis` replaced it; see "Synoptic ended" below.
+Nothing Synoptic is scheduled or deployed.)*
 
 **Constraint.** The free tier serves only the last ~7 days (older requests are
 refused in the response body), so there is no history to train on: these
@@ -499,8 +502,9 @@ models were running, which daily collectors keep growing.
 
 *2026-10-05*
 
-**Decision.** The scheduled work (Synoptic daily, PurpleAir LAN every 2 min,
-HRRR live hourly, MADIS, the silver → gold → backtest → site rebuild) runs as
+**Decision.** The scheduled work (MADIS live and archive, HRRR live and
+archive, RRFS, the house PurpleAir, the silver → gold → backtest → site
+rebuild; originally also Synoptic daily, gone with D10's trial) runs as
 Dagster OSS jobs on the swarm k3s cluster, triggered by schedules, sensors or
 the completion of upstream assets. Plain k3s CronJobs are skipped. Part of the
 point is small-scale operating experience with Dagster, especially its
@@ -527,8 +531,19 @@ too: laptop (`dagster dev`) → k3s.
 so the cluster needs Postgres first: for Dagster's run storage, and as the
 Iceberg catalog (PyIceberg's SQL catalog on Postgres is the smallest step;
 Lakekeeper later, D1). Data moves with `lake copy` (D11). Until the cluster
-is ready, Synoptic's 7-day window means its pull has to run from the laptop
-at least weekly.
+is ready, the laptop's catch-up script runs the pulls; MADIS real time keeps
+~5 days, so a gap longer than that needs `ingest madis --hours N` first.
+
+**Revised 2026-11-01** (`dagster-k8s.md`): everything runs in a window,
+08:00–21:00 Pacific, and nothing at night, ingests included, since nobody
+reads 1–6 h forecasts made at 3 AM and the archives keep the night's data.
+One hourly schedule is the only clock: each tick runs the live chain
+(ingests → forecast → site → publish) as one run, requests ranged gap-fill
+runs for missing partitions (the first tick of the day catches up the
+night), and once a day the silver → gold → backtest chain. Pools are per
+written table, plus one `heavy` pool for the memory-heavy steps, which are
+each the only writer of their tables. PurpleAir moves from every 2 min to
+the hourly chain, behind a proxy at the house or a Prometheus backfill.
 
 ## D13 · RRFS: collect at our points now, compare in spring 2027
 
@@ -563,6 +578,24 @@ HRRR isn't going away yet.
 day or two (its default window is the last 3 days). It is one more writer on
 the catalog, so it goes in the catch-up script, not alongside other loads.
 
+## D14 · Site hosted on S3 + CloudFront, published by Dagster
+
+*2026-11-01*
+
+**Decision.** The status site is published to a private S3 bucket behind
+CloudFront (`static-hosting.md`), replacing D8's nginx on the cluster. A
+`site_publish` asset uploads it after every site build: hourly in the run
+window after the live forecast, and after the daily backtest. D8's content
+and privacy rule stand.
+
+**Credentials.** An IAM user with a long-lived key, allowed only to put, get
+and list objects in that bucket, with an explicit deny on `data/groups/*`
+until phase C. Workload identity (AWS trusting the cluster's service-account
+tokens) was considered and deferred: it's a cluster-wide change, and it
+wouldn't narrow who can use the credential, since any run in the Dagster
+namespace can already read its Secrets. The AWS resources and the user live
+in the deployer's Terraform, not in this repo.
+
 ## Open
 
 - ~~RRFS/REFS operational date.~~ 2026-11-03 at 12Z (SCN 26-48, revised
@@ -571,7 +604,8 @@ the catalog, so it goes in the catch-up script, not alongside other loads.
   station; if that's an AcuRite (e.g. Atlas), it reports light in lux and UV,
   not W/m², and local capture needs rtl_433 or the Access hub. Tempest and
   Ecowitt report W/m² and push locally. Confirm before building the ingest.
-- External endpoint for weather.henry.st (later, via Traefik).
+- ~~External endpoint for weather.henry.st (later, via Traefik).~~ S3 +
+  CloudFront instead (D14).
 - ~~REFS `prob` contents.~~ Checked 2026-10-18: rain, ceiling (< 152 to
   3050 m), visibility, dewpoint and 10 m wind (> 10.3 m/s and up)
   exceedances; no gust. See D13.
